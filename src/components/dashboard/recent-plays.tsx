@@ -32,9 +32,10 @@ export function RecentPlays({ history }: RecentPlaysProps) {
         <ScrollArea className="h-[400px]">
           <div className="divide-y divide-border">
             {history.map((item) => (
-              <div
+              <a
                 key={item.id}
-                className="flex items-center gap-3 px-4 py-2.5"
+                href={`spotify:track:${item.spotify_track_id}`}
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/50 transition-colors group"
               >
                 <SpotifyImage
                   src={item.album_image_url}
@@ -42,7 +43,7 @@ export function RecentPlays({ history }: RecentPlaysProps) {
                   size="sm"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">
+                  <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
                     {item.track_name}
                   </p>
                   <p className="text-xs text-muted-foreground truncate">
@@ -52,7 +53,7 @@ export function RecentPlays({ history }: RecentPlaysProps) {
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                   {timeAgo(item.played_at)}
                 </span>
-              </div>
+              </a>
             ))}
           </div>
         </ScrollArea>

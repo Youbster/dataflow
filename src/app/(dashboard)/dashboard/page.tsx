@@ -25,6 +25,7 @@ interface HomeData {
     topGenre: string | null;
   };
   recentTopTracks: {
+    spotifyTrackId: string;
     trackName: string;
     artistName: string;
     albumImageUrl: string | null;
@@ -274,21 +275,21 @@ export default function DashboardPage() {
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">What you've been playing</p>
               <div className="grid gap-3 sm:grid-cols-3">
                 {homeData.recentTopTracks.map((t, i) => (
-                  <div key={t.trackName} className="flex items-center gap-3 rounded-2xl bg-card border border-border p-3">
+                  <a key={t.trackName} href={`spotify:track:${t.spotifyTrackId}`} className="flex items-center gap-3 rounded-2xl bg-card border border-border p-3 hover:border-primary/40 hover:bg-accent/50 transition-colors group">
                     {t.albumImageUrl ? (
                       <img src={t.albumImageUrl} alt={t.trackName} className="w-12 h-12 rounded-lg object-cover shrink-0" />
                     ) : (
                       <div className="w-12 h-12 rounded-lg bg-accent shrink-0" />
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-sm truncate">{t.trackName}</p>
+                      <p className="font-medium text-sm truncate group-hover:text-primary transition-colors">{t.trackName}</p>
                       <p className="text-xs text-muted-foreground truncate">{t.artistName}</p>
                       {t.playCount > 1 && (
                         <p className="text-xs text-primary mt-0.5">{t.playCount}× this week</p>
                       )}
                     </div>
                     <span className="text-3xl font-black text-muted-foreground/15 shrink-0 leading-none">{i + 1}</span>
-                  </div>
+                  </a>
                 ))}
               </div>
             </div>

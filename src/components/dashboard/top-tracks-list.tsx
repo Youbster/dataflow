@@ -17,9 +17,10 @@ export function TopTracksList({ tracks }: TopTracksListProps) {
       <CardContent className="p-0">
         <div className="divide-y divide-border">
           {tracks.slice(0, 20).map((track) => (
-            <div
+            <a
               key={track.id}
-              className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/50 transition-colors"
+              href={`spotify:track:${track.spotify_track_id}`}
+              className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/50 transition-colors group"
             >
               <span className="w-5 text-xs text-muted-foreground text-right tabular-nums">
                 {track.rank}
@@ -30,7 +31,7 @@ export function TopTracksList({ tracks }: TopTracksListProps) {
                 size="sm"
               />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">
+                <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
                   {track.track_name}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">
@@ -44,7 +45,7 @@ export function TopTracksList({ tracks }: TopTracksListProps) {
                     ).padStart(2, "0")}`
                   : ""}
               </span>
-            </div>
+            </a>
           ))}
         </div>
       </CardContent>

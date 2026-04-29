@@ -226,7 +226,15 @@ export default function MysteryPage() {
                 {isGolden ? "Your perfect undiscovered artist" : "Today's mystery"}
               </p>
               <h2 className="text-3xl font-black text-white leading-tight">{box.track_name}</h2>
-              <p className="text-lg text-white/60 font-medium">{box.artist_name}</p>
+              <a
+                href={`https://open.spotify.com/search/${encodeURIComponent(`${box.track_name} ${box.artist_name}`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-lg font-medium hover:underline"
+                style={{ color: isGolden ? "#fbbf24" : "#a78bfa" }}
+              >
+                {box.artist_name} ↗
+              </a>
             </div>
 
             <div

@@ -33,17 +33,17 @@ export async function GET() {
     const topGenre = Object.entries(genreCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
     // Recent top tracks (this week, deduplicated by play count)
-    const trackCounts: Record<string, { name: string; artist: string; count: number; img: string | null }> = {};
+    const trackCounts: Record<string, { id: string; name: string; artist: string; count: number; img: string | null }> = {};
     for (const p of plays7d) {
       if (!trackCounts[p.spotify_track_id]) {
-        trackCounts[p.spotify_track_id] = { name: p.track_name, artist: p.artist_names?.[0] ?? "", count: 0, img: p.album_image_url };
+        trackCounts[p.spotify_track_id] = { id: p.spotify_track_id, name: p.track_name, artist: p.artist_names?.[0] ?? "", count: 0, img: p.album_image_url };
       }
       trackCounts[p.spotify_track_id].count++;
     }
     const recentTopTracks = Object.values(trackCounts)
       .sort((a, b) => b.count - a.count)
       .slice(0, 3)
-      .map(t => ({ trackName: t.name, artistName: t.artist, albumImageUrl: t.img, playCount: t.count }));
+      .map(t => ({ spotifyTrackId: t.id, trackName: t.name, artistName: t.artist, albumImageUrl: t.img, playCount: t.count }));
 
     // Burnout detection (no AI needed — pure math)
     const playCounts3d: Record<string, { count: number; trackName: string; artistName: string }> = {};
