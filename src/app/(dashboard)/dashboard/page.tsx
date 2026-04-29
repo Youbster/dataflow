@@ -9,12 +9,12 @@ import { toast } from "sonner";
 import Link from "next/link";
 
 const EXAMPLES = [
+  "What did I used to listen to a lot?",
   "Something for a late night drive",
   "Songs like Blinding Lights but darker",
   "A playlist for deep focus work",
   "Find me underrated gems in my genres",
   "Music for a Sunday morning",
-  "Why do I keep listening to sad songs?",
 ];
 
 interface HomeData {
