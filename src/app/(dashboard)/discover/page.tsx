@@ -12,6 +12,7 @@ import {
 import {
   Sparkles, RefreshCw, Search, Music, Clock, TrendingUp,
   Gem, ArrowRight, ChevronRight, CloudRain, Flame, Zap,
+  Dna, Rewind, ChevronsUp, ChevronsDown, Minus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,6 +80,29 @@ interface BurnoutData {
   burnoutInsight: string;
 }
 
+interface GenreDNAEntry {
+  genre: string;
+  thenPct: number;
+  nowPct: number;
+  delta: number;
+}
+
+interface MusicDNA {
+  genreDNA: GenreDNAEntry[];
+  newArrivals: string[];
+  fadedAway: string[];
+  loyal: string[];
+  flashbackTracks: { trackName: string; artistName: string }[];
+  narrative: string;
+  shiftLabel: string;
+}
+
+interface FlashbackTrack {
+  trackName: string;
+  artistName: string;
+  note: string;
+}
+
 interface ArtistDive {
   artistName: string;
   hook: string;
@@ -114,8 +138,36 @@ export default function DiscoverPage() {
   const [burnout, setBurnout] = useState<BurnoutData | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastLoaded, setForecastLoaded] = useState(false);
+  const [dna, setDna] = useState<MusicDNA | null>(null);
+  const [dnaLoading, setDnaLoading] = useState(true);
+  const [flashback, setFlashback] = useState<FlashbackTrack[] | null>(null);
+  const [flashbackLoading, setFlashbackLoading] = useState(false);
 
-  useEffect(() => { loadForecast(); }, []);
+  useEffect(() => { loadForecast(); loadDna(); }, []);
+
+  async function loadDna() {
+    setDnaLoading(true);
+    try {
+      const res = await fetch("/api/ai/music-dna");
+      if (res.ok) setDna(await res.json());
+    } catch { /* silent */ }
+    finally { setDnaLoading(false); }
+  }
+
+  async function generateFlashback() {
+    setFlashbackLoading(true);
+    setFlashback(null);
+    try {
+      const res = await fetch("/api/ai/flashback", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setFlashback(data.tracks);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate flashback");
+    } finally {
+      setFlashbackLoading(false);
+    }
+  }
 
   async function loadForecast() {
     setForecastLoading(true);
@@ -555,6 +607,161 @@ export default function DiscoverPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Music DNA — always visible, auto-loads */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Dna className="w-4 h-4 text-primary" />
+            Music DNA — Then vs Now
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            How your taste has shifted between your all-time history and what you're into right now
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {dnaLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : !dna || (dna.genreDNA.length === 0 && dna.newArrivals.length === 0) ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              Sync more listening data to see your musical evolution
+            </p>
+          ) : (
+            <>
+              {/* Shift label + narrative */}
+              {dna.shiftLabel && (
+                <div>
+                  <p className="text-lg font-bold">{dna.shiftLabel}</p>
+                  {dna.narrative && (
+                    <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{dna.narrative}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Genre shift bars */}
+              {dna.genreDNA.length > 0 && (
+                <div className="space-y-2.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Genre shift</p>
+                  {dna.genreDNA.map((g) => (
+                    <div key={g.genre} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium capitalize">{g.genre}</span>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <span className="text-muted-foreground/60">{g.thenPct}% before</span>
+                          <span className="font-medium text-foreground">{g.nowPct}% now</span>
+                          {g.delta > 3 ? (
+                            <span className="flex items-center text-emerald-400 font-medium">
+                              <ChevronsUp className="w-3 h-3" />+{g.delta}%
+                            </span>
+                          ) : g.delta < -3 ? (
+                            <span className="flex items-center text-rose-400 font-medium">
+                              <ChevronsDown className="w-3 h-3" />{g.delta}%
+                            </span>
+                          ) : (
+                            <span className="flex items-center text-muted-foreground">
+                              <Minus className="w-3 h-3" />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+                        {/* before bar (ghost) */}
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full bg-muted-foreground/20"
+                          style={{ width: `${g.thenPct}%` }}
+                        />
+                        {/* now bar */}
+                        <div
+                          className="absolute inset-y-0 left-0 rounded-full transition-all"
+                          style={{
+                            width: `${g.nowPct}%`,
+                            backgroundColor: g.delta > 3 ? "#1DB954" : g.delta < -3 ? "#f43f5e" : "#6b7280",
+                            opacity: 0.85,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Artist evolution columns */}
+              <div className="grid grid-cols-3 gap-3 pt-1">
+                {[
+                  { label: "New arrivals", items: dna.newArrivals, color: "text-emerald-400", dot: "bg-emerald-400" },
+                  { label: "Staying loyal", items: dna.loyal, color: "text-primary", dot: "bg-primary" },
+                  { label: "Drifted away", items: dna.fadedAway, color: "text-rose-400", dot: "bg-rose-400" },
+                ].map(({ label, items, color, dot }) => (
+                  <div key={label}>
+                    <p className={`text-xs font-medium uppercase tracking-wider mb-2 ${color}`}>{label}</p>
+                    <div className="space-y-1.5">
+                      {items.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">—</p>
+                      ) : items.map(name => (
+                        <div key={name} className="flex items-center gap-1.5">
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+                          <span className="text-xs truncate">{name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Flashback Playlist */}
+              <div className="pt-1 border-t border-border">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-sm font-semibold">Flashback Playlist</p>
+                    <p className="text-xs text-muted-foreground">
+                      A playlist curated from who you used to be
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={generateFlashback}
+                    disabled={flashbackLoading}
+                    className="gap-1.5 shrink-0"
+                  >
+                    {flashbackLoading
+                      ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      : <Rewind className="w-3.5 h-3.5" />}
+                    {flashback ? "Regenerate" : "Generate"}
+                  </Button>
+                </div>
+
+                {flashbackLoading && (
+                  <div className="space-y-2">
+                    {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 rounded-lg" />)}
+                  </div>
+                )}
+
+                {flashback && !flashbackLoading && (
+                  <div className="space-y-3">
+                    {flashback.map((t, i) => (
+                      <div key={i} className="flex items-start gap-3">
+                        <span className="text-muted-foreground/40 font-bold text-sm w-5 shrink-0 mt-0.5">{i + 1}</span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">
+                            {t.trackName}
+                            <span className="text-muted-foreground font-normal"> · {t.artistName}</span>
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5 italic">{t.note}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Artist Deep Dive — always visible */}
       <Card>
