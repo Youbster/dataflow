@@ -17,23 +17,19 @@ export async function POST(request: Request) {
     const { playlistId, name, description, trackUris } = await request.json();
 
     const admin = createAdminClient();
+    const spotify = createSpotifyClient(user.id);
+
     const { data: profile } = await admin
       .from("user_profiles")
       .select("spotify_id")
       .eq("id", user.id)
       .single();
 
-    if (!profile?.spotify_id) {
-      return NextResponse.json(
-        { error: "Spotify profile not found" },
-        { status: 404 }
-      );
-    }
-
-    const spotify = createSpotifyClient(user.id);
+    const spotifyUserId =
+      profile?.spotify_id ?? (await spotify.getMe()).id;
 
     const playlist = await spotify.createPlaylist(
-      profile.spotify_id,
+      spotifyUserId,
       name,
       description || ""
     );

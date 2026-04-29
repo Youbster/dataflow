@@ -105,17 +105,17 @@ export default function PlaylistsPage() {
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to save");
-
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save");
+
       toast.success("Playlist saved to Spotify!");
 
       if (data.url) {
         window.open(data.url, "_blank");
       }
       await loadPlaylists();
-    } catch {
-      toast.error("Failed to save to Spotify");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save to Spotify");
     } finally {
       setSaving(false);
     }
