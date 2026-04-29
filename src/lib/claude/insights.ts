@@ -1,4 +1,4 @@
-import { claude, FAST_MODEL } from "./client";
+import { openai, FAST_MODEL } from "./client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildInsightsPrompt,
@@ -39,26 +39,26 @@ export async function generateInsights(userId: string): Promise<Insight[]> {
   }
 
   const tasteProfile = buildTasteProfile(topTracks || [], topArtists || []);
-
   const uniqueArtists = new Set(
     (topTracks || []).flatMap((t) => t.artist_names)
   ).size;
-
   const prompt = buildInsightsPrompt(
     tasteProfile,
     topTracks?.length || 0,
     uniqueArtists
   );
 
-  const response = await claude.messages.create({
+  const response = await openai.chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 1024,
-    system: MUSIC_EXPERT_SYSTEM,
-    messages: [{ role: "user", content: prompt }],
+    messages: [
+      { role: "system", content: MUSIC_EXPERT_SYSTEM },
+      { role: "user", content: prompt },
+    ],
   });
 
-  const textContent = response.content.find((c) => c.type === "text");
-  const jsonMatch = textContent?.text.match(/\{[\s\S]*\}/);
+  const text = response.choices[0].message.content ?? "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return [];
 
   const parsed = JSON.parse(jsonMatch[0]) as { insights: Insight[] };

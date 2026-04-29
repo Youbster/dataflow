@@ -1,4 +1,4 @@
-import { claude, FAST_MODEL } from "./client";
+import { openai, FAST_MODEL } from "./client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildStalenessPrompt,
@@ -50,15 +50,17 @@ export async function suggestFreshAlternatives(
   const tasteProfile = buildTasteProfile(topTracks || [], topArtists || []);
   const prompt = buildStalenessPrompt(staleTracks, tasteProfile);
 
-  const response = await claude.messages.create({
+  const response = await openai.chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 4096,
-    system: MUSIC_EXPERT_SYSTEM,
-    messages: [{ role: "user", content: prompt }],
+    messages: [
+      { role: "system", content: MUSIC_EXPERT_SYSTEM },
+      { role: "user", content: prompt },
+    ],
   });
 
-  const textContent = response.content.find((c) => c.type === "text");
-  const jsonMatch = textContent?.text.match(/\{[\s\S]*\}/);
+  const text = response.choices[0].message.content ?? "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return [];
 
   const parsed = JSON.parse(jsonMatch[0]) as {
@@ -68,8 +70,7 @@ export async function suggestFreshAlternatives(
   const spotify = createSpotifyClient(userId);
 
   for (const suggestion of parsed.suggestions) {
-    for (let i = 0; i < suggestion.alternatives.length; i++) {
-      const alt = suggestion.alternatives[i];
+    for (const alt of suggestion.alternatives) {
       try {
         const result = await spotify.searchTracks(
           `track:${alt.trackName} artist:${alt.artistName}`,

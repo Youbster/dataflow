@@ -1,4 +1,4 @@
-import { claude, FAST_MODEL } from "./client";
+import { openai, FAST_MODEL } from "./client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildPlaylistPrompt,
@@ -47,16 +47,18 @@ export async function generatePlaylist(
   const tasteProfile = buildTasteProfile(topTracks || [], topArtists || []);
   const prompt = buildPlaylistPrompt(tasteProfile, userPrompt, trackCount);
 
-  const response = await claude.messages.create({
+  const response = await openai.chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 4096,
-    system: MUSIC_EXPERT_SYSTEM,
-    messages: [{ role: "user", content: prompt }],
+    messages: [
+      { role: "system", content: MUSIC_EXPERT_SYSTEM },
+      { role: "user", content: prompt },
+    ],
   });
 
-  const textContent = response.content.find((c) => c.type === "text");
-  const jsonMatch = textContent?.text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Failed to parse Claude response");
+  const text = response.choices[0].message.content ?? "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Failed to parse AI response");
 
   const parsed = JSON.parse(jsonMatch[0]) as {
     tracks: Array<{ trackName: string; artistName: string; reason: string }>;
@@ -94,7 +96,7 @@ export async function generatePlaylist(
       name: `AI: ${userPrompt.slice(0, 60)}`,
       description: `Generated based on: "${userPrompt}"`,
       prompt_used: userPrompt,
-      claude_reasoning: textContent?.text.slice(0, 2000),
+      claude_reasoning: text.slice(0, 2000),
       mood_tags: extractMoodTags(userPrompt),
       track_count: verifiedTracks.length,
     })
@@ -119,7 +121,7 @@ export async function generatePlaylist(
 
   return {
     tracks: verifiedTracks,
-    reasoning: textContent?.text || "",
+    reasoning: text,
     playlistId: playlist?.id || "",
   };
 }

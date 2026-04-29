@@ -1,7 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
-export const claude = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+export const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
 });
 
-export const FAST_MODEL = "claude-sonnet-4-20250514";
+export const FAST_MODEL = "gpt-4o";
