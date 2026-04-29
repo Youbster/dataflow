@@ -54,9 +54,14 @@ export default function MysteryPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setBox(data);
-      // If already revealed today, skip straight to revealed
-      setPhase(data.claimed ? "revealed" : "idle");
       setClaimed(data.claimed);
+      if (data.claimed) {
+        // Already opened today — skip animation, go straight to revealed
+        setPhase("revealed");
+      } else {
+        // Always show the box first so the animation can play
+        setPhase("idle");
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load Mystery Box");
       setPhase("idle");

@@ -5,6 +5,16 @@ import { openai, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 
+function artistMatches(returned: string, requested: string): boolean {
+  const a = returned.toLowerCase();
+  const b = requested.toLowerCase();
+  if (a === b) return true;
+  // Accept if either name contains the first word of the other (handles "Cedric Gervais" vs "Cedric")
+  const aWord = a.split(" ")[0];
+  const bWord = b.split(" ")[0];
+  return a.includes(bWord) || b.includes(aWord);
+}
+
 async function verifyOnSpotify(
   userId: string,
   trackName: string,
@@ -12,18 +22,25 @@ async function verifyOnSpotify(
 ): Promise<{ trackName: string; artistName: string } | null> {
   try {
     const spotify = createSpotifyClient(userId);
-    const result = await spotify.searchTracks(`track:${trackName} artist:${artistName}`, 3);
+
+    // Exact field search
+    const result = await spotify.searchTracks(`track:${trackName} artist:${artistName}`, 5);
     const tracks = result.tracks?.items ?? [];
-    if (tracks.length === 0) {
-      // Broader search fallback
-      const fallback = await spotify.searchTracks(`${trackName} ${artistName}`, 3);
-      const fbTracks = fallback.tracks?.items ?? [];
-      if (fbTracks.length === 0) return null;
-      const t = fbTracks[0];
-      return { trackName: t.name, artistName: t.artists[0]?.name ?? artistName };
-    }
-    const t = tracks[0];
-    return { trackName: t.name, artistName: t.artists[0]?.name ?? artistName };
+    const exact = tracks.find(t =>
+      t.artists.some(a => artistMatches(a.name, artistName))
+    );
+    if (exact) return { trackName: exact.name, artistName: exact.artists[0]?.name ?? artistName };
+
+    // Broader fallback — only accept if artist name actually matches
+    const fallback = await spotify.searchTracks(`${trackName} ${artistName}`, 8);
+    const fbTracks = fallback.tracks?.items ?? [];
+    const match = fbTracks.find(t =>
+      t.artists.some(a => artistMatches(a.name, artistName))
+    );
+    if (match) return { trackName: match.name, artistName: match.artists[0]?.name ?? artistName };
+
+    // Completely different artist returned — reject
+    return null;
   } catch {
     return null;
   }
