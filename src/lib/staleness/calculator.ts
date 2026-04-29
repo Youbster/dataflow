@@ -71,7 +71,7 @@ export async function calculateStalenessScores(
   const results: StalenessResult[] = [];
 
   for (const [trackId, data] of trackMap) {
-    if (data.totalPlays < 3) continue;
+    if (data.totalPlays < 2) continue;
 
     const frequencyScore = Math.min(100, (data.plays7d / 7) * 50);
 

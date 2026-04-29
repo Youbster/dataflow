@@ -48,8 +48,17 @@ export default function StalenessPage() {
   >({});
 
   useEffect(() => {
-    fetchScores();
+    syncThenFetch();
   }, []);
+
+  async function syncThenFetch() {
+    try {
+      await fetch("/api/spotify/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: false }) });
+    } catch {
+      // non-fatal — proceed to fetch whatever's in DB
+    }
+    await fetchScores();
+  }
 
   async function fetchScores() {
     try {
@@ -112,8 +121,8 @@ export default function StalenessPage() {
         </div>
       ) : scores.length === 0 ? (
         <EmptyState
-          title="No staleness data yet"
-          description="Keep listening to music and sync your data to see which songs you've been overplaying."
+          title="No overplayed tracks found"
+          description="This works best once you've listened to the same songs a few times. Come back after a few days of listening — we'll show you which tracks you're burning out on."
         />
       ) : (
         <>
