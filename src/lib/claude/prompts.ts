@@ -101,6 +101,51 @@ Reference specific artists and genres. Each insight should be 1-2 sentences.
 Return as JSON: { "insights": [{ "text": "...", "category": "genre|discovery|habit|mood|trend" }] }`;
 }
 
+export function buildWrappedPrompt(
+  monthName: string,
+  stats: {
+    totalPlays: number;
+    uniqueTracks: number;
+    uniqueArtists: number;
+    estimatedMinutes: number;
+    mostActiveDay: string;
+    topGenres: string[];
+  },
+  topTrack: { trackName: string; artistName: string; playCount: number } | null,
+  topArtist: { name: string; playCount: number } | null,
+  weekBreakdown: { week: number; plays: number; topTrack: string }[],
+  tasteProfile: TasteProfile
+): string {
+  return `Write a listener's Monthly Wrapped narrative for ${monthName}.
+
+THEIR MONTH IN NUMBERS:
+- Total plays: ${stats.totalPlays}
+- Unique tracks: ${stats.uniqueTracks}
+- Unique artists: ${stats.uniqueArtists}
+- Estimated minutes: ${stats.estimatedMinutes}
+- Most active day: ${stats.mostActiveDay}
+- Top genres: ${stats.topGenres.join(", ")}
+${topTrack ? `- #1 track: "${topTrack.trackName}" by ${topTrack.artistName} (${topTrack.playCount} plays)` : ""}
+${topArtist ? `- #1 artist: ${topArtist.name} (${topArtist.playCount} plays)` : ""}
+
+WEEK BY WEEK:
+${weekBreakdown.map((w) => `- Week ${w.week}: ${w.plays} plays${w.topTrack ? `, top track: "${w.topTrack}"` : ""}`).join("\n")}
+
+THEIR BROADER TASTE:
+- Top artists overall: ${tasteProfile.topArtists.slice(0, 8).map((a) => a.name).join(", ")}
+
+Be specific, personal, and vivid. Reference their actual artists. Make it feel like a music journalist wrote it about them specifically.
+
+Return ONLY valid JSON:
+{
+  "monthWord": "Single evocative word capturing this month's energy (e.g. 'Untethered', 'Electric', 'Searching', 'Restless')",
+  "archetypeName": "Their music identity for THIS month — 3-4 words (different from a general archetype, specific to this period)",
+  "description": "2-3 sentences about who they were musically this month. Reference their specific top artists and what it says about them.",
+  "moodNarrative": "2-3 sentences tracing the month's musical arc — how it started, shifted, and ended. Was energy rising or falling? Any notable patterns?",
+  "standoutStat": "One surprising or interesting stat observation (e.g. 'You discovered 3 new artists every week' or 'Your listening peaked every Wednesday at midnight')"
+}`;
+}
+
 export function buildVibeForecastPrompt(
   tasteProfile: TasteProfile,
   weather: { city: string; country: string; tempC: number; condition: string; isRaining: boolean; humidity: number },

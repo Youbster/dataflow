@@ -15,11 +15,13 @@ import {
   Settings,
   Music,
   Sparkles,
+  Gift,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/discover", label: "Discover", icon: Sparkles },
+  { href: "/wrapped", label: "Wrapped", icon: Gift },
   { href: "/playlists", label: "Playlists", icon: ListMusic },
   { href: "/staleness", label: "Staleness", icon: AlertTriangle },
   { href: "/social", label: "Social", icon: Users },
