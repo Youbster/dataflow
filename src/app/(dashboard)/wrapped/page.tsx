@@ -160,8 +160,8 @@ export default function WrappedPage() {
         <img
           src={data.top5Artists[0].imageUrl}
           alt={data.topArtist?.name}
-          className="w-32 h-32 rounded-full object-cover ring-4"
-          style={{ ringColor: accent }}
+          className="w-32 h-32 rounded-full object-cover"
+          style={{ outline: `4px solid ${accent}`, outlineOffset: "2px" }}
         />
       )}
       <div>
