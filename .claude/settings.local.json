@@ -29,7 +29,8 @@
       "Bash(git commit -m 'Fix: save to Spotify falls back to API for spotify_id; surface real error messages *)",
       "Bash(git commit -m 'Fix: use session provider_token directly for playlist creation to ensure correct scopes *)",
       "Bash(git commit -m 'Fix: replace CSS var colors with hardcoded hex in Recharts SVG elements *)",
-      "Bash(git commit -m 'Add Discover page: music identity, listening patterns, hidden gems, taste evolution, artist deep dive *)"
+      "Bash(git commit -m 'Add Discover page: music identity, listening patterns, hidden gems, taste evolution, artist deep dive *)",
+      "Bash(git commit -m 'Add Weekly Vibe Forecast \\(weather + AI\\) and dynamic Burnout Alert with Sonic Palate Cleanser *)"
     ]
   }
 }

@@ -101,6 +101,87 @@ Reference specific artists and genres. Each insight should be 1-2 sentences.
 Return as JSON: { "insights": [{ "text": "...", "category": "genre|discovery|habit|mood|trend" }] }`;
 }
 
+export function buildVibeForecastPrompt(
+  tasteProfile: TasteProfile,
+  weather: { city: string; country: string; tempC: number; condition: string; isRaining: boolean; humidity: number },
+  dayOfWeek: string,
+  season: string
+): string {
+  const topGenres = Object.entries(tasteProfile.genreDistribution)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([g]) => g)
+    .join(", ");
+
+  return `You are predicting this listener's musical week based on their taste, current weather, and context.
+
+WEATHER RIGHT NOW in ${weather.city}, ${weather.country}:
+- Condition: ${weather.condition}
+- Temperature: ${weather.tempC}°C
+- Raining: ${weather.isRaining}
+- Humidity: ${weather.humidity}%
+
+CONTEXT:
+- Today: ${dayOfWeek}
+- Season: ${season}
+
+THEIR TASTE:
+- Top artists: ${tasteProfile.topArtists.slice(0, 12).map((a) => a.name).join(", ")}
+- Top genres: ${topGenres}
+- Favourite tracks: ${tasteProfile.topTracks.slice(0, 8).map((t) => `"${t.name}" by ${t.artist}`).join("; ")}
+
+Predict their Weekly Soundtrack. Make the weather connection feel vivid and specific — don't be generic. Reference their actual artists.
+
+Return ONLY valid JSON:
+{
+  "weekTheme": "Poetic 3-6 word phrase for the week's sonic mood (e.g. 'Grey skies, heavier grooves', 'Sun-drunk & restless')",
+  "weeklyMood": "Single evocative word (e.g. 'Introspective', 'Untethered', 'Electric')",
+  "weatherInsight": "2 sentences connecting today's weather to their predicted musical cravings. Be creative and specific to their genres.",
+  "predictedGenres": ["genre1", "genre2", "genre3"],
+  "predictions": [
+    { "trackName": "real Spotify track", "artistName": "real artist", "reason": "why this fits THIS week specifically — reference weather or context" },
+    { "trackName": "real Spotify track", "artistName": "real artist", "reason": "..." },
+    { "trackName": "real Spotify track", "artistName": "real artist", "reason": "..." },
+    { "trackName": "real Spotify track", "artistName": "real artist", "reason": "..." },
+    { "trackName": "real Spotify track", "artistName": "real artist", "reason": "..." }
+  ]
+}`;
+}
+
+export function buildPaletteCleanserPrompt(
+  burnoutTrack: { trackName: string; artistName: string; playCount: number; pct: number },
+  tasteProfile: TasteProfile
+): string {
+  const topGenres = Object.entries(tasteProfile.genreDistribution)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([g]) => g)
+    .join(", ");
+
+  return `This user has played "${burnoutTrack.trackName}" by ${burnoutTrack.artistName} ${burnoutTrack.playCount} times in the last 3 days — that's ${burnoutTrack.pct}% of ALL their listening. Classic burnout territory.
+
+Their broader taste:
+- Artists they love: ${tasteProfile.topArtists.slice(0, 8).map((a) => a.name).join(", ")}
+- Genres: ${topGenres}
+
+Find them ONE perfect "Sonic Palate Cleanser" — a real Spotify track that:
+1. Shares musical DNA with "${burnoutTrack.trackName}" (similar energy, mood, or emotional texture)
+2. But is different enough to break the loop (different artist, shifted genre, new sonic texture)
+3. Feels like a refreshing twist, not an abrupt change
+
+Return ONLY valid JSON:
+{
+  "cleanser": {
+    "trackName": "real Spotify track name",
+    "artistName": "real artist name",
+    "sharedDNA": "What sonic quality it shares with the overplayed track (be specific: tempo, mood, texture, chord quality)",
+    "freshElement": "What makes it feel refreshingly different",
+    "reasoning": "1-2 sentence explanation of why this is the perfect reset track for them"
+  },
+  "burnoutInsight": "A witty, warm, non-judgmental 1-sentence observation about playing a song ${burnoutTrack.playCount} times in 3 days"
+}`;
+}
+
 export function buildDiscoverPrompt(
   tasteProfile: TasteProfile,
   patterns: {

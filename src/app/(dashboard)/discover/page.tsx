@@ -1,17 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
-  BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell,
+  BarChart, Bar, XAxis, ResponsiveContainer, Cell,
 } from "recharts";
 import {
   Sparkles, RefreshCw, Search, Music, Clock, TrendingUp,
-  Gem, ArrowRight, ChevronRight,
+  Gem, ArrowRight, ChevronRight, CloudRain, Flame, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,6 +46,39 @@ interface EvolutionData {
   longTermGenres: string[];
 }
 
+interface VibeForecast {
+  weekTheme: string;
+  weeklyMood: string;
+  weatherInsight: string;
+  predictedGenres: string[];
+  predictions: { trackName: string; artistName: string; reason: string }[];
+}
+
+interface WeatherData {
+  city: string;
+  country: string;
+  tempC: number;
+  condition: string;
+  isRaining: boolean;
+  humidity: number;
+}
+
+interface BurnoutData {
+  trackName: string;
+  artistName: string;
+  playCount: number;
+  pct: number;
+  totalRecent: number;
+  cleanser: {
+    trackName: string;
+    artistName: string;
+    sharedDNA: string;
+    freshElement: string;
+    reasoning: string;
+  };
+  burnoutInsight: string;
+}
+
 interface ArtistDive {
   artistName: string;
   hook: string;
@@ -76,6 +109,30 @@ export default function DiscoverPage() {
   const [artistDive, setArtistDive] = useState<ArtistDive | null>(null);
   const [diveLoading, setDiveLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const [forecast, setForecast] = useState<VibeForecast | null>(null);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [burnout, setBurnout] = useState<BurnoutData | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastLoaded, setForecastLoaded] = useState(false);
+
+  useEffect(() => { loadForecast(); }, []);
+
+  async function loadForecast() {
+    setForecastLoading(true);
+    try {
+      const res = await fetch("/api/ai/vibe-forecast", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setForecast(data.forecast);
+      setWeather(data.weather);
+      setBurnout(data.burnout);
+      setForecastLoaded(true);
+    } catch {
+      // Silently fail — forecast is non-critical
+    } finally {
+      setForecastLoading(false);
+    }
+  }
 
   async function generate() {
     setLoading(true);
@@ -137,6 +194,112 @@ export default function DiscoverPage() {
           {generated ? "Refresh Story" : "Generate My Story"}
         </Button>
       </div>
+
+      {/* Burnout Alert */}
+      {forecastLoading && (
+        <Skeleton className="h-32 rounded-xl" />
+      )}
+      {burnout && !forecastLoading && (
+        <Card className="border-orange-500/30 bg-orange-500/5">
+          <CardContent className="pt-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/15 flex items-center justify-center shrink-0">
+                <Flame className="w-5 h-5 text-orange-400" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold">Burnout Alert</p>
+                  <Badge variant="outline" className="border-orange-500/40 text-orange-400 text-xs">
+                    {burnout.playCount}× in 3 days · {burnout.pct}% of your listening
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  <span className="font-medium text-foreground">"{burnout.trackName}"</span> by {burnout.artistName}
+                </p>
+                <p className="text-xs text-muted-foreground italic mt-1">{burnout.burnoutInsight}</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-orange-500/20 bg-background p-4 space-y-2">
+              <p className="text-xs font-medium text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                Sonic Palate Cleanser
+              </p>
+              <p className="font-medium">{burnout.cleanser.trackName}
+                <span className="text-muted-foreground font-normal"> · {burnout.cleanser.artistName}</span>
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{burnout.cleanser.reasoning}</p>
+              <div className="flex gap-4 pt-1">
+                <div>
+                  <p className="text-xs text-muted-foreground">Shared DNA</p>
+                  <p className="text-xs font-medium">{burnout.cleanser.sharedDNA}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Fresh twist</p>
+                  <p className="text-xs font-medium">{burnout.cleanser.freshElement}</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Weekly Vibe Forecast */}
+      {forecast && weather && !forecastLoading && (
+        <Card className="border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-transparent">
+          <CardContent className="pt-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center shrink-0">
+                  <CloudRain className="w-5 h-5 text-blue-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold">Weekly Vibe Forecast</p>
+                    <span className="text-xs text-muted-foreground">
+                      {weather.city} · {weather.tempC}°C · {weather.condition}
+                    </span>
+                  </div>
+                  <p className="text-xl font-bold mt-1">{forecast.weekTheme}</p>
+                  <Badge variant="outline" className="mt-1 border-blue-500/30 text-blue-400 text-xs">
+                    {forecast.weeklyMood}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-sm text-muted-foreground leading-relaxed">{forecast.weatherInsight}</p>
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                You'll crave this week
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {forecast.predictedGenres.map((g) => (
+                  <Badge key={g} className="text-xs bg-blue-500/10 text-blue-400 border-0">{g}</Badge>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                Predicted obsessions
+              </p>
+              <div className="space-y-2.5">
+                {forecast.predictions.map((p, i) => (
+                  <div key={i} className="flex gap-3 text-sm">
+                    <span className="text-blue-400 font-medium shrink-0 w-4">{i + 1}</span>
+                    <div>
+                      <span className="font-medium">{p.trackName}</span>
+                      <span className="text-muted-foreground"> · {p.artistName}</span>
+                      <p className="text-xs text-muted-foreground mt-0.5">{p.reason}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Empty state */}
       {!generated && !loading && (
