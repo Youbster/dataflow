@@ -41,12 +41,12 @@ export function ListeningTimeline({ history }: ListeningTimelineProps) {
                 <linearGradient id="playGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop
                     offset="5%"
-                    stopColor="hsl(var(--primary))"
+                    stopColor="#1DB954"
                     stopOpacity={0.3}
                   />
                   <stop
                     offset="95%"
-                    stopColor="hsl(var(--primary))"
+                    stopColor="#1DB954"
                     stopOpacity={0}
                   />
                 </linearGradient>
@@ -70,7 +70,7 @@ export function ListeningTimeline({ history }: ListeningTimelineProps) {
               <Area
                 type="monotone"
                 dataKey="plays"
-                stroke="hsl(var(--primary))"
+                stroke="#1DB954"
                 fill="url(#playGradient)"
                 strokeWidth={2}
               />

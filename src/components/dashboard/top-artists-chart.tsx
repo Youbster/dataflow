@@ -9,6 +9,8 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+
+const CHART_COLORS = ["#1DB954", "#1ed760", "#17a349", "#3b82f6", "#8b5cf6"];
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { UserTopArtist } from "@/types/database";
 
@@ -53,7 +55,7 @@ export function TopArtistsChart({ artists }: TopArtistsChartProps) {
               {data.map((_, index) => (
                 <Cell
                   key={index}
-                  fill={`hsl(var(--chart-${(index % 5) + 1}))`}
+                  fill={CHART_COLORS[index % CHART_COLORS.length]}
                   opacity={1 - index * 0.06}
                 />
               ))}

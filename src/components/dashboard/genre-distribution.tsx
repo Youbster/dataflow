@@ -11,14 +11,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { UserTopArtist } from "@/types/database";
 
 const COLORS = [
-  "hsl(var(--chart-1))",
-  "hsl(var(--chart-2))",
-  "hsl(var(--chart-3))",
-  "hsl(var(--chart-4))",
-  "hsl(var(--chart-5))",
-  "hsl(142 71% 35%)",
-  "hsl(200 60% 50%)",
-  "hsl(280 60% 50%)",
+  "#1DB954",
+  "#1ed760",
+  "#17a349",
+  "#3b82f6",
+  "#8b5cf6",
+  "#f59e0b",
+  "#ef4444",
+  "#06b6d4",
 ];
 
 interface GenreDistributionProps {
