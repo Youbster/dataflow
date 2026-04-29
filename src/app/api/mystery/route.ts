@@ -3,6 +3,46 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { openai, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
+import { createSpotifyClient } from "@/lib/spotify/client";
+
+async function verifyOnSpotify(
+  userId: string,
+  trackName: string,
+  artistName: string
+): Promise<{ trackName: string; artistName: string } | null> {
+  try {
+    const spotify = createSpotifyClient(userId);
+    const result = await spotify.searchTracks(`track:${trackName} artist:${artistName}`, 3);
+    const tracks = result.tracks?.items ?? [];
+    if (tracks.length === 0) {
+      // Broader search fallback
+      const fallback = await spotify.searchTracks(`${trackName} ${artistName}`, 3);
+      const fbTracks = fallback.tracks?.items ?? [];
+      if (fbTracks.length === 0) return null;
+      const t = fbTracks[0];
+      return { trackName: t.name, artistName: t.artists[0]?.name ?? artistName };
+    }
+    const t = tracks[0];
+    return { trackName: t.name, artistName: t.artists[0]?.name ?? artistName };
+  } catch {
+    return null;
+  }
+}
+
+async function generateSuggestion(prompt: string): Promise<{ trackName: string; artistName: string; reason: string } | null> {
+  const aiRes = await openai.chat.completions.create({
+    model: FAST_MODEL,
+    max_tokens: 300,
+    messages: [
+      { role: "system", content: MUSIC_EXPERT_SYSTEM },
+      { role: "user", content: prompt },
+    ],
+  });
+  const text = aiRes.choices[0].message.content ?? "";
+  const match = text.match(/\{[\s\S]*\}/)?.[0];
+  if (!match) return null;
+  return JSON.parse(match);
+}
 
 export async function GET() {
   const supabase = await createClient();
@@ -13,7 +53,7 @@ export async function GET() {
     const admin = createAdminClient();
     const today = new Date().toISOString().split("T")[0];
 
-    // Return today's box if it already exists
+    // Return today's box if already generated
     const { data: existing } = await admin
       .from("mystery_boxes")
       .select("*")
@@ -23,7 +63,7 @@ export async function GET() {
 
     if (existing) return NextResponse.json(existing);
 
-    // Compute streak from yesterday
+    // Compute streak
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const { data: yesterdayBox } = await admin
@@ -48,54 +88,68 @@ export async function GET() {
     const topGenres = [...new Set((shortArtists ?? []).flatMap(a => a.genres ?? []))].slice(0, 6).join(", ");
     const topTracks = (shortTracks ?? []).slice(0, 8).map(t => `"${t.track_name}" by ${t.artist_names?.[0]}`).join("; ");
 
-    const prompt = isGolden
-      ? `GOLDEN BOX — Day ${streakCount} streak reward.
+    const buildPrompt = (excludeExtra: string[] = []) => {
+      const avoidList = [...allKnownArtists, ...excludeExtra].join(", ");
+      return isGolden
+        ? `GOLDEN BOX — Day ${streakCount} streak reward.
 
 This listener's top artists: ${topArtistNames.slice(0, 8).join(", ")}
 Their top genres: ${topGenres}
-Known artists to AVOID: ${allKnownArtists.slice(0, 20).join(", ")}
+Artists to AVOID (they know all of these): ${avoidList}
 
-Find them ONE track from an artist they have NEVER heard of (not in the avoid list at all) that is a near-perfect match to their musical DNA. This is their hidden soulmate artist — someone who sounds exactly like their taste but they've never discovered. Make it feel like a revelation.
+Find ONE track from an artist they have NEVER heard of (not in the avoid list) that is a near-perfect match to their musical DNA. This is their hidden soulmate artist. Make it feel like a revelation.
+
+IMPORTANT: Only suggest tracks you are certain exist on Spotify. Stick to real, well-documented tracks.
 
 Return ONLY valid JSON:
-{
-  "trackName": "...",
-  "artistName": "...",
-  "reason": "2-3 sentences explaining why this unknown artist is their perfect match — be specific about the sonic DNA, reference their actual taste"
-}`
-      : `Generate ONE mystery track for this listener.
+{ "trackName": "...", "artistName": "...", "reason": "2-3 sentences about the sonic DNA match" }`
+        : `Generate ONE mystery track for this listener.
 
 Their top genres: ${topGenres}
 Their top tracks: ${topTracks}
 Their top artists: ${topArtistNames.slice(0, 8).join(", ")}
-Artists to AVOID (they already know these): ${topArtistNames.join(", ")}
+Artists to AVOID: ${avoidList}
 
-Create "familiar novelty" — suggest ONE real Spotify track that feels deeply aligned with their taste but is something they haven't heard. It could be a lesser-known artist in their genre, a different era of a genre they love, or a subtle sonic sibling to what they already play. Not a mainstream hit they definitely know.
+Suggest ONE real Spotify track that creates "familiar novelty" — aligned with their taste but something they likely haven't heard. Prefer well-known tracks by less-known artists over obscure tracks. Do NOT invent song titles.
+
+IMPORTANT: Only suggest tracks you are highly confident exist on Spotify with this exact name.
 
 Return ONLY valid JSON:
-{
-  "trackName": "...",
-  "artistName": "...",
-  "reason": "2-3 sentences explaining why this feels like them — reference their actual genres and artists, be specific and personal"
-}`;
+{ "trackName": "...", "artistName": "...", "reason": "2-3 sentences about why this fits them" }`;
+    };
 
-    const aiRes = await openai.chat.completions.create({
-      model: FAST_MODEL,
-      max_tokens: 300,
-      messages: [
-        { role: "system", content: MUSIC_EXPERT_SYSTEM },
-        { role: "user", content: prompt },
-      ],
-    });
+    // Try up to 3 times, verifying against Spotify each time
+    let verified: { trackName: string; artistName: string } | null = null;
+    let finalReason = "";
+    const failedArtists: string[] = [];
 
-    const text = aiRes.choices[0].message.content ?? "";
-    const match = text.match(/\{[\s\S]*\}/)?.[0];
-    if (!match) throw new Error("AI returned invalid response");
-    const { trackName, artistName, reason } = JSON.parse(match);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const suggestion = await generateSuggestion(buildPrompt(failedArtists));
+      if (!suggestion) continue;
+
+      const found = await verifyOnSpotify(user.id, suggestion.trackName, suggestion.artistName);
+      if (found) {
+        verified = found;
+        finalReason = suggestion.reason;
+        break;
+      }
+      // Track failed artist so next attempt avoids it
+      failedArtists.push(suggestion.artistName);
+    }
+
+    if (!verified) throw new Error("Could not find a verified track on Spotify after 3 attempts");
 
     const { data: inserted, error } = await admin
       .from("mystery_boxes")
-      .insert({ user_id: user.id, date: today, track_name: trackName, artist_name: artistName, reason, is_golden: isGolden, streak_count: streakCount })
+      .insert({
+        user_id: user.id,
+        date: today,
+        track_name: verified.trackName,
+        artist_name: verified.artistName,
+        reason: finalReason,
+        is_golden: isGolden,
+        streak_count: streakCount,
+      })
       .select()
       .single();
 
