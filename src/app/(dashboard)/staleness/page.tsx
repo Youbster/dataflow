@@ -133,15 +133,21 @@ export default function StalenessPage() {
               </div>
               <div>
                 <p className="font-semibold">
-                  {staleCount} {staleCount === 1 ? "song" : "songs"} getting
-                  stale
+                  {staleCount} {staleCount === 1 ? "song" : "songs"} getting stale
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {scores.length} tracks analyzed from your listening history
+                  {scores.length} {scores.length === 1 ? "track" : "tracks"} analyzed from your listening history
                 </p>
               </div>
             </CardContent>
           </Card>
+
+          {staleCount === 0 && (
+            <div className="text-center py-12 text-muted-foreground">
+              <p className="font-medium text-foreground">Your ears are fresh 🎧</p>
+              <p className="text-sm mt-1">No overplayed tracks detected. Come back after a few more listening sessions.</p>
+            </div>
+          )}
 
           <div className="space-y-3">
             {scores.filter((s) => s.stalenessScore > 25).map((track) => {
