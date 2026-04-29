@@ -140,7 +140,7 @@ async function syncTopItems(
           genres: artist.genres,
           image_url: artist.images[0]?.url ?? null,
           popularity: artist.popularity,
-          follower_count: artist.followers.total,
+          follower_count: artist.followers?.total ?? null,
           time_range: timeRange,
           rank: index + 1,
           fetched_at: new Date().toISOString(),
