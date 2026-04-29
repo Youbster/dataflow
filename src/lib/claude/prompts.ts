@@ -101,6 +101,88 @@ Reference specific artists and genres. Each insight should be 1-2 sentences.
 Return as JSON: { "insights": [{ "text": "...", "category": "genre|discovery|habit|mood|trend" }] }`;
 }
 
+export function buildDiscoverPrompt(
+  tasteProfile: TasteProfile,
+  patterns: {
+    peakHour: number;
+    peakDay: string;
+    topHours: { hour: number; count: number }[];
+    topDays: { day: string; count: number }[];
+    totalPlays: number;
+    uniqueTracks: number;
+  },
+  hiddenGems: { trackName: string; artistName: string; popularity: number; playCount: number }[],
+  shortTermArtists: string[],
+  longTermArtists: string[]
+): string {
+  const newArtists = shortTermArtists.filter((a) => !longTermArtists.includes(a)).slice(0, 5);
+  const loyalArtists = shortTermArtists.filter((a) => longTermArtists.includes(a)).slice(0, 5);
+  const timeLabel = (h: number) =>
+    h < 6 ? "late night" : h < 12 ? "morning" : h < 18 ? "afternoon" : h < 22 ? "evening" : "night";
+
+  return `You are analyzing someone's Spotify listening data to write a deeply personal music story about them. Be specific, surprising, and insightful — not generic. Reference their actual artists and patterns.
+
+TASTE PROFILE:
+- Top artists: ${tasteProfile.topArtists.slice(0, 15).map((a) => `${a.name} (${a.genres.slice(0, 2).join(", ")})`).join("; ")}
+- Top tracks: ${tasteProfile.topTracks.slice(0, 10).map((t) => `"${t.name}" by ${t.artist}`).join("; ")}
+- Top genres: ${Object.entries(tasteProfile.genreDistribution).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([g]) => g).join(", ")}
+
+LISTENING PATTERNS:
+- Total plays analyzed: ${patterns.totalPlays}
+- Unique tracks in rotation: ${patterns.uniqueTracks}
+- Peak listening hour: ${patterns.peakHour}:00 (${timeLabel(patterns.peakHour)})
+- Peak day: ${patterns.peakDay}
+- Top listening hours: ${patterns.topHours.slice(0, 4).map((h) => `${h.hour}:00 (${h.count} plays)`).join(", ")}
+
+HIDDEN GEMS (tracks they love that most people haven't heard):
+${hiddenGems.length > 0 ? hiddenGems.map((g) => `- "${g.trackName}" by ${g.artistName} (popularity: ${g.popularity}/100, played ${g.playCount}x)`).join("\n") : "- No low-popularity tracks found — they may lean mainstream"}
+
+TASTE EVOLUTION:
+- Artists NEW in recent rotation (last 4 weeks): ${newArtists.length ? newArtists.join(", ") : "Stable — no major new artists"}
+- Artists they've stayed loyal to over time: ${loyalArtists.length ? loyalArtists.join(", ") : "Constantly evolving taste"}
+
+Return ONLY valid JSON:
+{
+  "archetype": {
+    "name": "3-4 word unique archetype (e.g. 'The Late-Night Excavator', 'The Genre Shapeshifter', 'The Loyal Wanderer')",
+    "tagline": "One punchy sentence that captures their music identity",
+    "description": "2-3 sentences that feel like a journalist who really knows them. Reference specific artists and patterns. Make it surprising.",
+    "traits": ["Trait 1", "Trait 2", "Trait 3", "Trait 4"]
+  },
+  "listeningStory": "2-3 sentences about WHEN and HOW they listen — time of day, day of week, what this says about their lifestyle. Be specific.",
+  "evolutionNarrative": "2-3 sentences about how their taste has shifted — what they've gravitated toward, what they've stayed loyal to, what this suggests about them as a person.",
+  "hiddenGemInsight": "1-2 sentences about what their relationship with obscure vs mainstream music reveals about them."
+}`;
+}
+
+export function buildArtistDivePrompt(
+  artistName: string,
+  tasteProfile: TasteProfile
+): string {
+  return `Create a personalized exploration guide for the artist "${artistName}" tailored to this listener.
+
+Their taste profile:
+- Top genres: ${Object.entries(tasteProfile.genreDistribution).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([g]) => g).join(", ")}
+- Top artists they already love: ${tasteProfile.topArtists.slice(0, 8).map((a) => a.name).join(", ")}
+
+Create a curated path through ${artistName}'s music that feels like a knowledgeable friend guiding them. Include:
+- The perfect starting point for someone with their taste
+- 2-3 essential tracks that define the artist
+- 1-2 deep cuts most fans miss
+- The best album to start with and why
+
+Return ONLY valid JSON:
+{
+  "artistName": "${artistName}",
+  "hook": "One sentence on why this artist fits their taste specifically",
+  "startingPoint": { "trackName": "...", "reason": "..." },
+  "essentials": [{ "trackName": "...", "note": "..." }, { "trackName": "...", "note": "..." }],
+  "deepCuts": [{ "trackName": "...", "note": "..." }],
+  "bestAlbum": { "albumName": "...", "reason": "..." },
+  "vibe": "2-sentence description of what makes this artist special and what era/mood of theirs to explore first"
+}`;
+}
+
 export function buildStalenessPrompt(
   staleTracks: Array<{
     trackName: string;
