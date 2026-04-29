@@ -12,12 +12,14 @@ import {
   Music,
   Sparkles,
   Gift,
+  Package,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/discover", label: "Discover", icon: Sparkles },
   { href: "/wrapped", label: "Wrapped", icon: Gift },
+  { href: "/mystery", label: "Mystery Box", icon: Package },
   { href: "/playlists", label: "Playlists", icon: ListMusic },
   { href: "/staleness", label: "Staleness", icon: AlertTriangle },
   { href: "/social", label: "Social", icon: Users },
