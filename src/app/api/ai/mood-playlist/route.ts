@@ -53,8 +53,12 @@ export async function POST(request: NextRequest) {
   const userPrompt: string = body.prompt ?? "";
   const seedTrack: { trackName: string; artistName: string } | null = body.seedTrack ?? null;
   const sessionMinutes: number = body.sessionMinutes ?? 60;
-  const familiarity: "mixed" | "fresh" = body.familiarity ?? "mixed";
-  const intensity: "low" | "mid" | "high" = body.intensity ?? "mid";
+  const familiarity: "familiar" | "mixed" | "fresh" = body.familiarity ?? "mixed";
+  const intensity:   "low" | "mid" | "high"         = body.intensity   ?? "mid";
+  const vocals:      "any" | "lyrics" | "instrumental" = body.vocals   ?? "any";
+  const language:    "any" | "english" | "match"     = body.language   ?? "any";
+  const genreLock:   string | null = body.genreLock  ?? null;
+  const artistLock:  string | null = body.artistLock ?? null;
 
   if (!userPrompt.trim() && !seedTrack && familiarity !== "fresh") {
     return NextResponse.json({ error: "Provide a description or seed track" }, { status: 400 });
@@ -130,6 +134,24 @@ export async function POST(request: NextRequest) {
       intensity === "low"  ? "\nINTENSITY: LOW — Keep everything calm, gentle, ambient throughout." :
       "";
 
+    // Familiarity note (mixed/familiar — fresh is handled by a separate prompt path)
+    const familiarityNote = familiarity === "familiar"
+      ? "\nFAMILIAR MODE: Keep it comfortable — heavy on tracks they already know and love, very few discoveries."
+      : "";
+
+    // Advanced constraints
+    const constraints: string[] = [];
+    if (vocals === "lyrics")       constraints.push("VOCALS: Only tracks WITH lyrics/vocals — no instrumentals");
+    if (vocals === "instrumental") constraints.push("VOCALS: Only INSTRUMENTAL tracks — absolutely no vocals");
+    if (language === "english")    constraints.push("LANGUAGE: Only English-language tracks");
+    if (language === "match" && nativeLanguages.length > 0)
+                                   constraints.push(`LANGUAGE: Mix in tracks in the user's preferred languages: ${nativeLanguages.join(", ")}`);
+    if (genreLock)                 constraints.push(`GENRE LOCK: All tracks must be within or closely related to: ${genreLock}`);
+    if (artistLock)                constraints.push(`ARTIST PREFERENCE: ${artistLock}`);
+    const constraintsStr = constraints.length > 0
+      ? "\nADDITIONAL CONSTRAINTS (hard rules, do not violate):\n" + constraints.map(c => `- ${c}`).join("\n")
+      : "";
+
     // Build the request description for Claude
     const requestLines: string[] = [];
     if (userPrompt.trim()) requestLines.push(`"${userPrompt.trim()}"`);
@@ -157,7 +179,7 @@ DISCOVERY MODE RULES:
 - ALL ${counts.total} tracks MUST be by artists completely new to this listener
 - Match their genre DNA but find lesser-known acts, cult favourites, underground gems
 - Every track should feel like "How did I not know this artist?"
-- SPOTIFY ACCURACY: 100% certain the track exists on Spotify with exact title + artist
+- SPOTIFY ACCURACY: 100% certain the track exists on Spotify with exact title + artist${constraintsStr}
 
 Return ONLY valid JSON:
 {
@@ -171,14 +193,14 @@ Return ONLY valid JSON:
     }
   ]
 }`
-      // ── Normal / Mixed mode prompt ────────────────────────────────────────────
+      // ── Normal / Familiar mode prompt ─────────────────────────────────────────
       : `Generate a ${counts.total}-track playlist.
 
 WHAT THE USER WANTS:
 ${requestStr}
 
 TIME CONTEXT: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}${timeNote ? ` — ${timeNote}` : ""}
-SESSION: ~${sessionMinutes} min → ${counts.total} tracks${intensityStr}
+SESSION: ~${sessionMinutes} min → ${counts.total} tracks${intensityStr}${familiarityNote}
 
 THEIR TASTE PROFILE:
 - Current top artists: ${topArtists || "no data yet"}
@@ -206,7 +228,7 @@ HARD RULES:
 ${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : ""}
 - Read the user's description carefully — match the energy, emotion, and context they described precisely
 - NO jarring energy jumps between consecutive tracks
-- SPOTIFY ACCURACY: Only suggest tracks you are 100% certain exist on Spotify with this exact name and artist. Never invent titles. Prefer well-known studio releases over remixes, live versions, or obscure editions.
+- SPOTIFY ACCURACY: Only suggest tracks you are 100% certain exist on Spotify with this exact name and artist. Never invent titles. Prefer well-known studio releases over remixes, live versions, or obscure editions.${constraintsStr}
 
 Return ONLY valid JSON:
 {

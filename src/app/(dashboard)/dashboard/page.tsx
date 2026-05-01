@@ -27,7 +27,7 @@ const GENRE_COLORS = [
   "bg-blue-500/15 text-blue-400 border-blue-500/25",
 ];
 
-// ─── Activity / context chips ─────────────────────────────────────────────────
+// ─── Activity chips — 4 × 2 grid, all visible at once ────────────────────────
 const ACTIVITY_CHIPS = [
   { emoji: "🏋️", label: "Workout",   prompt: "High energy workout, pump it up, no slow moments" },
   { emoji: "📚", label: "Focus",     prompt: "Deep focus, minimal lyrics, flow state, keep me locked in" },
@@ -41,6 +41,7 @@ const ACTIVITY_CHIPS = [
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Phase = "pick" | "loading" | "result";
+type Vibe  = "familiar" | "mixed" | "fresh";
 
 interface RecentTrack {
   spotifyTrackId: string;
@@ -77,13 +78,22 @@ interface HomeData {
 }
 
 // ─── Pill ─────────────────────────────────────────────────────────────────────
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function Pill({
+  active, onClick, children, violet = false,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  violet?: boolean;
+}) {
   return (
     <button
       onClick={onClick}
       className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all ${
         active
-          ? "border-primary bg-primary/20 text-primary"
+          ? violet
+            ? "border-violet-500/50 bg-violet-500/20 text-violet-400"
+            : "border-primary bg-primary/20 text-primary"
           : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"
       }`}
     >
@@ -94,23 +104,31 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const [homeData, setHomeData]         = useState<HomeData | null>(null);
-  const [homeLoading, setHomeLoading]   = useState(true);
-  const [syncing, setSyncing]           = useState(false);
+  const [homeData, setHomeData]       = useState<HomeData | null>(null);
+  const [homeLoading, setHomeLoading] = useState(true);
+  const [syncing, setSyncing]         = useState(false);
 
-  // generator state
-  const [phase, setPhase]               = useState<Phase>("pick");
-  const [promptText, setPromptText]     = useState("");
-  const [seedTrack, setSeedTrack]       = useState<RecentTrack | null>(null);
-  const [sessionMins, setSessionMins]   = useState<20 | 60 | 120>(60);
-  const [intensity, setIntensity]       = useState<"low" | "mid" | "high">("mid");
-  const [discoveryMode, setDiscoveryMode] = useState(false);
-  const [showCustomize, setShowCustomize] = useState(false);
-  const [playlist, setPlaylist]         = useState<GeneratedPlaylist | null>(null);
+  // generator — core
+  const [phase, setPhase]             = useState<Phase>("pick");
+  const [promptText, setPromptText]   = useState("");
+  const [seedTrack, setSeedTrack]     = useState<RecentTrack | null>(null);
+  const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
   const [feedbackMode, setFeedbackMode] = useState(false);
   const [savedToSpotify, setSavedToSpotify] = useState(false);
-  const [isSaving, setIsSaving]         = useState(false);
+  const [isSaving, setIsSaving]       = useState(false);
+
+  // generator — always-visible controls
+  const [intensity, setIntensity]     = useState<"low" | "mid" | "high">("mid");
+  const [sessionMins, setSessionMins] = useState<20 | 60 | 120>(60);
+  const [vibe, setVibe]               = useState<Vibe>("mixed");
+
+  // generator — advanced (hidden behind "More options")
+  const [showMore, setShowMore]       = useState(false);
+  const [vocals, setVocals]           = useState<"any" | "lyrics" | "instrumental">("any");
+  const [language, setLanguage]       = useState<"any" | "english" | "match">("any");
+  const [genreLock, setGenreLock]     = useState("");
+  const [artistLock, setArtistLock]   = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
@@ -143,10 +161,9 @@ export default function DashboardPage() {
     finally { setSyncing(false); }
   }
 
-  // Smart suggestion chips — built from actual Spotify data, never generic
+  // Smart suggestions — only data-driven, no generic time-of-day filler
   const smartSuggestions = useMemo(() => {
     if (!homeData) return [];
-    const hour = new Date().getHours();
     const suggestions: string[] = [];
 
     if (homeData.topArtist && homeData.topGenres?.[0]) {
@@ -159,26 +176,22 @@ export default function DashboardPage() {
       suggestions.push(`${homeData.vibe.word} — something I haven't heard yet`);
     }
 
-    const timeHint =
-      hour >= 22 || hour < 5  ? "Late night — deep and atmospheric, something to disappear into" :
-      hour < 11               ? "Easy morning, ease me into the day" :
-      hour < 17               ? "Afternoon focus, keep the momentum going" :
-                                "Evening unwind, the day is winding down";
-    suggestions.push(timeHint);
-
     if (homeData.burnout) {
-      suggestions.push(`Something completely different — need a break from "${homeData.burnout.trackName}"`);
+      suggestions.push(`Something completely different — taking a break from "${homeData.burnout.trackName}"`);
     }
 
-    return suggestions.slice(0, 3);
+    return suggestions.slice(0, 2);
   }, [homeData]);
 
-  const canGenerate = discoveryMode || promptText.trim().length > 0 || seedTrack !== null;
+  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || seedTrack !== null;
+
+  // Has any advanced option been customised?
+  const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
   async function generate() {
     if (!canGenerate) return;
     setPhase("loading");
-    setGeneratedDiscovery(discoveryMode);
+    setGeneratedDiscovery(vibe === "fresh");
     try {
       const res = await fetch("/api/ai/mood-playlist", {
         method: "POST",
@@ -187,8 +200,12 @@ export default function DashboardPage() {
           prompt: promptText.trim(),
           seedTrack: seedTrack ? { trackName: seedTrack.trackName, artistName: seedTrack.artistName } : null,
           sessionMinutes: sessionMins,
-          familiarity: discoveryMode ? "fresh" : "mixed",
+          familiarity: vibe,
           intensity,
+          vocals,
+          language,
+          genreLock: genreLock.trim() || null,
+          artistLock: artistLock.trim() || null,
         }),
       });
       const data = await res.json();
@@ -252,7 +269,6 @@ export default function DashboardPage() {
     }
   }
 
-  // ── First name from display name ───────────────────────────────────────────
   const firstName = homeData?.profile?.displayName?.split(" ")[0] ?? null;
 
   return (
@@ -270,44 +286,29 @@ export default function DashboardPage() {
       ) : homeData?.profile ? (
         <div className="flex items-start gap-3 px-1">
           {homeData.profile.avatarUrl ? (
-            <img
-              src={homeData.profile.avatarUrl}
-              alt={homeData.profile.displayName}
-              className="w-10 h-10 rounded-full object-cover shrink-0"
-            />
+            <img src={homeData.profile.avatarUrl} alt={homeData.profile.displayName} className="w-10 h-10 rounded-full object-cover shrink-0" />
           ) : (
             <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-              <span className="text-primary font-bold text-sm">
-                {homeData.profile.displayName?.[0]?.toUpperCase() ?? "?"}
-              </span>
+              <span className="text-primary font-bold text-sm">{homeData.profile.displayName?.[0]?.toUpperCase() ?? "?"}</span>
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-base leading-tight">
-              Hey, {firstName ?? "there"}
-            </p>
+            <p className="font-bold text-base leading-tight">Hey, {firstName ?? "there"}</p>
             {homeData.topGenres.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1.5">
                 {homeData.topGenres.map((g, i) => (
-                  <span
-                    key={g}
-                    className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${GENRE_COLORS[i % GENRE_COLORS.length]}`}
-                  >
-                    {g}
-                  </span>
+                  <span key={g} className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${GENRE_COLORS[i % GENRE_COLORS.length]}`}>{g}</span>
                 ))}
               </div>
             )}
             {homeData.vibe?.sentence && (
-              <p className="text-xs text-muted-foreground mt-1.5 italic leading-relaxed">
-                {homeData.vibe.sentence}
-              </p>
+              <p className="text-xs text-muted-foreground mt-1.5 italic leading-relaxed">{homeData.vibe.sentence}</p>
             )}
           </div>
         </div>
       ) : null}
 
-      {/* ── Generator ──────────────────────────────────────────────────────── */}
+      {/* ── Generator card ─────────────────────────────────────────────────── */}
       <div className="rounded-3xl border border-border bg-card">
 
         {/* ── PICK ─────────────────────────────────────────────────────────── */}
@@ -317,68 +318,47 @@ export default function DashboardPage() {
             {/* Header */}
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold">Generate a playlist</p>
-              <button
-                onClick={handleSync}
-                disabled={syncing}
-                title="Sync from Spotify"
-                className="text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1 shrink-0"
-              >
+              <button onClick={handleSync} disabled={syncing} title="Sync from Spotify" className="text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1 shrink-0">
                 <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
               </button>
             </div>
 
-            {/* Activity chips */}
-            <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-0.5 scrollbar-none">
+            {/* Activity chips — 4 × 2 grid, all visible */}
+            <div className="grid grid-cols-4 gap-1.5">
               {ACTIVITY_CHIPS.map((chip) => (
                 <button
                   key={chip.label}
-                  onClick={() => {
-                    setPromptText(chip.prompt);
-                    setSeedTrack(null);
-                    textareaRef.current?.focus();
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium shrink-0 transition-all ${
+                  onClick={() => { setPromptText(chip.prompt); setSeedTrack(null); textareaRef.current?.focus(); }}
+                  className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
                     promptText === chip.prompt
                       ? "border-primary bg-primary/15 text-primary"
                       : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
                   }`}
                 >
-                  <span>{chip.emoji}</span>
-                  <span>{chip.label}</span>
+                  <span className="text-base leading-none">{chip.emoji}</span>
+                  <span className="text-[10px]">{chip.label}</span>
                 </button>
               ))}
             </div>
 
-            {/* Text input */}
+            {/* Textarea */}
             <textarea
               ref={textareaRef}
               value={promptText}
-              onChange={(e) => {
-                setPromptText(e.target.value);
-                if (e.target.value) setSeedTrack(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && canGenerate) {
-                  e.preventDefault();
-                  generate();
-                }
-              }}
+              onChange={(e) => { setPromptText(e.target.value); if (e.target.value) setSeedTrack(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
               placeholder="Describe a vibe, activity, or feeling…"
               rows={2}
               className="w-full resize-none rounded-xl bg-accent/50 border border-border px-3.5 py-3 text-sm placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
             />
 
-            {/* Smart suggestion chips */}
+            {/* Smart suggestion chips — data-driven only */}
             {!homeLoading && smartSuggestions.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {smartSuggestions.map((s) => (
                   <button
                     key={s}
-                    onClick={() => {
-                      setPromptText(s);
-                      setSeedTrack(null);
-                      textareaRef.current?.focus();
-                    }}
+                    onClick={() => { setPromptText(s); setSeedTrack(null); textareaRef.current?.focus(); }}
                     className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                       promptText === s
                         ? "border-primary/50 bg-primary/10 text-primary"
@@ -396,9 +376,7 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <div className="flex-1 h-px bg-border/40" />
-                  <p className="text-[10px] font-semibold text-muted-foreground/40 uppercase tracking-widest shrink-0">
-                    or start from a track
-                  </p>
+                  <p className="text-[10px] font-semibold text-muted-foreground/40 uppercase tracking-widest shrink-0">or start from a track</p>
                   <div className="flex-1 h-px bg-border/40" />
                 </div>
                 <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 scrollbar-none">
@@ -407,23 +385,10 @@ export default function DashboardPage() {
                     return (
                       <button
                         key={t.spotifyTrackId}
-                        onClick={() => {
-                          setSeedTrack(isSelected ? null : t);
-                          if (!isSelected) setPromptText("");
-                        }}
-                        className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border shrink-0 transition-all ${
-                          isSelected
-                            ? "border-primary bg-primary/10"
-                            : "border-border bg-accent/40 hover:border-border/80 hover:bg-accent/60"
-                        }`}
+                        onClick={() => { setSeedTrack(isSelected ? null : t); if (!isSelected) setPromptText(""); }}
+                        className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border shrink-0 transition-all ${isSelected ? "border-primary bg-primary/10" : "border-border bg-accent/40 hover:border-border/80 hover:bg-accent/60"}`}
                       >
-                        {t.albumImageUrl && (
-                          <img
-                            src={t.albumImageUrl}
-                            alt={t.trackName}
-                            className="w-7 h-7 rounded object-cover shrink-0"
-                          />
-                        )}
+                        {t.albumImageUrl && <img src={t.albumImageUrl} alt={t.trackName} className="w-7 h-7 rounded object-cover shrink-0" />}
                         <div className="text-left">
                           <p className="text-xs font-medium truncate max-w-[90px] leading-snug">{t.trackName}</p>
                           <p className="text-[10px] text-muted-foreground truncate max-w-[90px]">{t.artistName}</p>
@@ -436,78 +401,123 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* Loading skeleton for seed tracks */}
             {homeLoading && (
               <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} className="h-11 w-32 rounded-xl shrink-0" />
-                ))}
+                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-11 w-32 rounded-xl shrink-0" />)}
               </div>
             )}
 
-            {/* Customize toggle */}
-            <button
-              onClick={() => setShowCustomize(!showCustomize)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
-            >
-              {showCustomize ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              Customize
-            </button>
+            {/* ── Always-visible controls ─────────────────────────────────── */}
+            <div className="space-y-3">
 
-            {showCustomize && (
-              <div className="space-y-3 rounded-xl bg-accent/20 border border-border/50 px-3 py-3">
-                <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Intensity</p>
-                  <div className="flex gap-1.5">
-                    <Pill active={intensity === "low"}  onClick={() => setIntensity("low")}>Calm</Pill>
-                    <Pill active={intensity === "mid"}  onClick={() => setIntensity("mid")}>Balanced</Pill>
-                    <Pill active={intensity === "high"} onClick={() => setIntensity("high")}>Energetic</Pill>
-                  </div>
+              {/* Intensity */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Intensity</p>
+                <div className="flex gap-1.5">
+                  <Pill active={intensity === "low"}  onClick={() => setIntensity("low")}>Calm</Pill>
+                  <Pill active={intensity === "mid"}  onClick={() => setIntensity("mid")}>Balanced</Pill>
+                  <Pill active={intensity === "high"} onClick={() => setIntensity("high")}>Energetic</Pill>
                 </div>
               </div>
-            )}
 
-            {/* Duration */}
-            <div className="space-y-1.5">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Duration</p>
-              <div className="flex gap-1.5">
-                <Pill active={sessionMins === 20}  onClick={() => setSessionMins(20)}>20 min</Pill>
-                <Pill active={sessionMins === 60}  onClick={() => setSessionMins(60)}>1 hour</Pill>
-                <Pill active={sessionMins === 120} onClick={() => setSessionMins(120)}>2 hr+</Pill>
+              {/* Duration */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Duration</p>
+                <div className="flex gap-1.5">
+                  <Pill active={sessionMins === 20}  onClick={() => setSessionMins(20)}>20 min</Pill>
+                  <Pill active={sessionMins === 60}  onClick={() => setSessionMins(60)}>1 hour</Pill>
+                  <Pill active={sessionMins === 120} onClick={() => setSessionMins(120)}>2 hr+</Pill>
+                </div>
+              </div>
+
+              {/* Vibe */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Vibe</p>
+                <div className="flex gap-1.5">
+                  <Pill active={vibe === "familiar"} onClick={() => setVibe("familiar")}>Familiar</Pill>
+                  <Pill active={vibe === "mixed"}    onClick={() => setVibe("mixed")}>Mixed</Pill>
+                  <Pill active={vibe === "fresh"} violet onClick={() => setVibe("fresh")}>
+                    <span className="flex items-center justify-center gap-1"><Telescope className="w-3 h-3" />Fresh</span>
+                  </Pill>
+                </div>
               </div>
             </div>
 
-            {/* Discovery mode toggle + Generate button */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setDiscoveryMode(!discoveryMode)}
-                title="Generate all tracks you've never heard before"
-                className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-semibold shrink-0 transition-all ${
-                  discoveryMode
-                    ? "border-violet-500/50 bg-violet-500/15 text-violet-400"
-                    : "border-border bg-accent/30 text-muted-foreground hover:text-foreground hover:border-border/80"
-                }`}
-              >
-                <Telescope className="w-3.5 h-3.5" />
-                All new
-              </button>
-              <Button
-                onClick={generate}
-                disabled={!canGenerate}
-                className={`flex-1 h-10 text-sm font-semibold transition-all ${
-                  discoveryMode ? "bg-violet-600 hover:bg-violet-500 text-white" : ""
-                }`}
-              >
-                <Sparkles className="w-4 h-4 mr-2" />
-                {discoveryMode ? "Discover music" : "Build my playlist"}
-              </Button>
-            </div>
+            {/* ── More options (advanced, hidden by default) ──────────────── */}
+            <button
+              onClick={() => setShowMore(!showMore)}
+              className={`flex items-center gap-1 text-[11px] transition-colors ${
+                hasAdvanced
+                  ? "text-primary"
+                  : "text-muted-foreground/50 hover:text-muted-foreground"
+              }`}
+            >
+              {showMore ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              More options{hasAdvanced ? " ·" : ""}
+              {hasAdvanced && <span className="ml-0.5 text-primary/80">customised</span>}
+            </button>
 
-            {discoveryMode && (
-              <p className="text-[11px] text-violet-400/70 text-center -mt-1">
-                All tracks will be brand-new artists you&apos;ve never heard
-              </p>
+            {showMore && (
+              <div className="space-y-3 rounded-xl bg-accent/20 border border-border/50 px-3 py-3">
+
+                {/* Vocals */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Vocals</p>
+                  <div className="flex gap-1.5">
+                    <Pill active={vocals === "any"}          onClick={() => setVocals("any")}>Any</Pill>
+                    <Pill active={vocals === "lyrics"}       onClick={() => setVocals("lyrics")}>Lyrics</Pill>
+                    <Pill active={vocals === "instrumental"} onClick={() => setVocals("instrumental")}>Instrumental</Pill>
+                  </div>
+                </div>
+
+                {/* Language */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Language</p>
+                  <div className="flex gap-1.5">
+                    <Pill active={language === "any"}     onClick={() => setLanguage("any")}>Any</Pill>
+                    <Pill active={language === "english"} onClick={() => setLanguage("english")}>English</Pill>
+                    <Pill active={language === "match"}   onClick={() => setLanguage("match")}>My taste</Pill>
+                  </div>
+                </div>
+
+                {/* Genre lock */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Genre</p>
+                  <input
+                    type="text"
+                    value={genreLock}
+                    onChange={(e) => setGenreLock(e.target.value)}
+                    placeholder="e.g. hip-hop, jazz, 90s rock…"
+                    className="w-full rounded-lg bg-accent/50 border border-border px-3 py-1.5 text-xs placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
+                  />
+                </div>
+
+                {/* Artist preference */}
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Artist</p>
+                  <input
+                    type="text"
+                    value={artistLock}
+                    onChange={(e) => setArtistLock(e.target.value)}
+                    placeholder="e.g. more like Frank Ocean, avoid Drake…"
+                    className="w-full rounded-lg bg-accent/50 border border-border px-3 py-1.5 text-xs placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
+                  />
+                </div>
+
+              </div>
             )}
+
+            {/* Generate */}
+            <Button
+              onClick={generate}
+              disabled={!canGenerate}
+              className={`w-full h-10 text-sm font-semibold transition-all ${
+                vibe === "fresh" ? "bg-violet-600 hover:bg-violet-500 text-white" : ""
+              }`}
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {vibe === "fresh" ? "Discover music" : "Build my playlist"}
+            </Button>
 
           </div>
         )}
@@ -519,13 +529,11 @@ export default function DashboardPage() {
               <Loader2 className={`w-7 h-7 animate-spin ${generatedDiscovery ? "text-violet-400" : "text-primary"}`} />
             </div>
             <div>
-              <p className="font-bold text-lg">
-                {generatedDiscovery ? "Hunting discoveries…" : "Building your arc…"}
-              </p>
+              <p className="font-bold text-lg">{generatedDiscovery ? "Hunting discoveries…" : "Building your arc…"}</p>
               <p className="text-sm text-muted-foreground mt-1 max-w-xs">
                 {generatedDiscovery
                   ? "Scanning your taste DNA for artists you've never heard"
-                  : "Reading your taste, blocking overplayed songs, finding the right discoveries"}
+                  : "Reading your taste, blocking overplayed songs, finding the right picks"}
               </p>
             </div>
           </div>
@@ -538,7 +546,7 @@ export default function DashboardPage() {
               const playableUris = playlist.tracks.filter((t) => t.spotifyUri).map((t) => t.spotifyUri!);
               return (
                 <div className="space-y-2">
-                  {/* Row 1: label + action buttons on the same line */}
+                  {/* Row 1: label + action buttons */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                       {generatedDiscovery && (
@@ -548,12 +556,8 @@ export default function DashboardPage() {
                       )}
                       {!generatedDiscovery && seedTrack ? (
                         <>
-                          {seedTrack.albumImageUrl && (
-                            <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />
-                          )}
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate">
-                            Based on {seedTrack.trackName}
-                          </span>
+                          {seedTrack.albumImageUrl && <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />}
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate">Based on {seedTrack.trackName}</span>
                         </>
                       ) : !generatedDiscovery ? (
                         <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[160px]">
@@ -561,38 +565,31 @@ export default function DashboardPage() {
                         </span>
                       ) : null}
                       <span className="text-muted-foreground/30 text-[10px] shrink-0">·</span>
-                      <span className="text-[10px] text-muted-foreground shrink-0">
-                        {sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}
-                      </span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">{sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                    {playableUris.length > 0 && <PlayOnSpotify uris={playableUris} label="Play" />}
-                    {playableUris.length > 0 && (
-                      <button
-                        onClick={handleSaveToSpotify}
-                        disabled={isSaving || savedToSpotify}
-                        className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
-                          savedToSpotify
-                            ? "border-primary/50 bg-primary/10 text-primary cursor-default"
-                            : "border-border bg-accent/50 text-muted-foreground hover:text-primary hover:border-primary/40"
-                        }`}
-                      >
-                        {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : savedToSpotify ? <Check className="w-3.5 h-3.5" /> : <Heart className="w-3.5 h-3.5" />}
-                        {savedToSpotify ? "Saved" : "Save"}
+                      {playableUris.length > 0 && <PlayOnSpotify uris={playableUris} label="Play" />}
+                      {playableUris.length > 0 && (
+                        <button
+                          onClick={handleSaveToSpotify}
+                          disabled={isSaving || savedToSpotify}
+                          className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full border transition-colors ${
+                            savedToSpotify
+                              ? "border-primary/50 bg-primary/10 text-primary cursor-default"
+                              : "border-border bg-accent/50 text-muted-foreground hover:text-primary hover:border-primary/40"
+                          }`}
+                        >
+                          {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : savedToSpotify ? <Check className="w-3.5 h-3.5" /> : <Heart className="w-3.5 h-3.5" />}
+                          {savedToSpotify ? "Saved" : "Save"}
+                        </button>
+                      )}
+                      <button onClick={reset} className="text-xs px-2.5 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground transition-colors">
+                        New
                       </button>
-                    )}
-                    <button
-                      onClick={reset}
-                      className="text-xs px-2.5 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      New
-                    </button>
+                    </div>
                   </div>
-                  </div>
-                  {/* Row 2: intro — full width, clamped to 2 lines */}
-                  <p className="text-xs text-muted-foreground italic leading-relaxed line-clamp-2">
-                    {playlist.intro}
-                  </p>
+                  {/* Row 2: intro — full width, 2-line clamp */}
+                  <p className="text-xs text-muted-foreground italic leading-relaxed line-clamp-2">{playlist.intro}</p>
                 </div>
               );
             })()}
@@ -638,10 +635,7 @@ export default function DashboardPage() {
 
             {/* Feedback */}
             {!feedbackMode ? (
-              <button
-                onClick={() => setFeedbackMode(true)}
-                className="w-full text-xs text-muted-foreground/50 hover:text-muted-foreground border border-dashed border-border/40 hover:border-border rounded-xl py-2 transition-all"
-              >
+              <button onClick={() => setFeedbackMode(true)} className="w-full text-xs text-muted-foreground/50 hover:text-muted-foreground border border-dashed border-border/40 hover:border-border rounded-xl py-2 transition-all">
                 Something off?
               </button>
             ) : (
@@ -658,9 +652,7 @@ export default function DashboardPage() {
                     </button>
                   ))}
                 </div>
-                <button onClick={() => setFeedbackMode(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-                  Never mind
-                </button>
+                <button onClick={() => setFeedbackMode(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">Never mind</button>
               </div>
             )}
           </div>
