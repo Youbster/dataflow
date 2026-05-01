@@ -407,7 +407,51 @@ Return ONLY valid JSON:
       r.status === "fulfilled" ? r.value : { ...result.tracks[0], spotifyTrackId: null, spotifyUri: null, albumImageUrl: null }
     );
 
-    return NextResponse.json({ intro: result.intro, tracks });
+    // Persist to generated_playlists so the Playlists page can show history
+    let playlistId: string | null = null;
+    try {
+      const moodLabel = mood.charAt(0).toUpperCase() + mood.slice(1);
+      const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const coverImageUrl = tracks.find((t) => t.spotifyTrackId && t.albumImageUrl)?.albumImageUrl ?? null;
+      const verifiedCount = tracks.filter((t) => t.spotifyTrackId).length;
+
+      const { data: pl } = await admin
+        .from("generated_playlists")
+        .insert({
+          user_id: user.id,
+          name: `${moodLabel} — ${dateLabel}`,
+          description: result.intro,
+          prompt_used: `${mood} | ${intensity} | ${sessionMinutes}min | env:${environment ?? "any"} | familiarity:${familiarity}`,
+          mood_tags: [mood],
+          track_count: verifiedCount,
+          cover_image_url: coverImageUrl,
+        })
+        .select("id")
+        .single();
+
+      if (pl?.id) {
+        playlistId = pl.id;
+        const trackRows = tracks
+          .filter((t) => t.spotifyTrackId)
+          .map((t, i) => ({
+            playlist_id: pl.id,
+            spotify_track_id: t.spotifyTrackId!,
+            track_name: t.trackName,
+            artist_names: [t.artistName],
+            album_image_url: t.albumImageUrl ?? null,
+            position: i,
+            claude_note: t.reason,
+          }));
+        if (trackRows.length > 0) {
+          await admin.from("playlist_tracks").insert(trackRows);
+        }
+      }
+    } catch (dbErr) {
+      // Don't fail the request — playlist still works without history
+      console.error("[mood-playlist] DB save failed:", dbErr);
+    }
+
+    return NextResponse.json({ intro: result.intro, tracks, playlistId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate playlist";
     return NextResponse.json({ error: message }, { status: 500 });

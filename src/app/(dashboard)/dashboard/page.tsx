@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   RefreshCw, Send, Sparkles, Gift, ListMusic, Flame,
-  ArrowRight, Loader2, ExternalLink, ArrowLeft,
+  ArrowRight, Loader2, ExternalLink, ArrowLeft, Heart, Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -55,6 +55,7 @@ interface MoodTrack {
 interface MoodPlaylist {
   intro: string;
   tracks: MoodTrack[];
+  playlistId?: string | null;
 }
 
 interface HomeData {
@@ -105,6 +106,8 @@ export default function DashboardPage() {
   const [language, setLanguage]           = useState<"any" | "english" | "other">("any");
   const [moodPlaylist, setMoodPlaylist]   = useState<MoodPlaylist | null>(null);
   const [feedbackMode, setFeedbackMode]   = useState(false);
+  const [savedToSpotify, setSavedToSpotify] = useState(false);
+  const [isSaving, setIsSaving]             = useState(false);
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -202,6 +205,37 @@ export default function DashboardPage() {
     setFamiliarity("mix");
     setVocalPref("any");
     setLanguage("any");
+    setSavedToSpotify(false);
+    setIsSaving(false);
+  }
+
+  async function handleSaveToSpotify() {
+    if (!moodPlaylist || isSaving || savedToSpotify) return;
+    const playableUris = moodPlaylist.tracks.filter((t) => t.spotifyUri).map((t) => t.spotifyUri!);
+    if (playableUris.length === 0) return;
+    setIsSaving(true);
+    try {
+      const moodLabel = MOODS.find((m) => m.id === selectedMood)?.label ?? "Mood";
+      const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const res = await fetch("/api/spotify/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playlistId: moodPlaylist.playlistId ?? null,
+          name: `${moodLabel} — ${dateLabel}`,
+          description: moodPlaylist.intro,
+          trackUris: playableUris,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save");
+      setSavedToSpotify(true);
+      toast.success("Playlist saved to Spotify!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save to Spotify");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   const activeMood = MOODS.find(m => m.id === selectedMood);
@@ -435,6 +469,27 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     {playableUris.length > 0 && (
                       <PlayOnSpotify uris={playableUris} label="Play All" />
+                    )}
+                    {playableUris.length > 0 && (
+                      <button
+                        onClick={handleSaveToSpotify}
+                        disabled={isSaving || savedToSpotify}
+                        title={savedToSpotify ? "Saved to Spotify" : "Save to Spotify"}
+                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${
+                          savedToSpotify
+                            ? "border-[#1DB954]/50 bg-[#1DB954]/10 text-[#1DB954] cursor-default"
+                            : "border-border bg-accent/50 text-muted-foreground hover:text-[#1DB954] hover:border-[#1DB954]/40"
+                        }`}
+                      >
+                        {isSaving ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : savedToSpotify ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : (
+                          <Heart className="w-3.5 h-3.5" />
+                        )}
+                        {savedToSpotify ? "Saved" : "Save"}
+                      </button>
                     )}
                     <button
                       onClick={resetMood}

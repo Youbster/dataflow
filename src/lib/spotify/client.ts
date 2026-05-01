@@ -110,13 +110,20 @@ class SpotifyClient {
       s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
     const artistNorm = normalize(artistName);
+    const trackNorm = normalize(trackName);
 
     function artistMatches(track: SpotifyTrack): boolean {
       return track.artists.some((a) => {
         const n = normalize(a.name);
-        // Either direction substring is fine: "&ME" ↔ "me", "A$AP Rocky" ↔ "aap"
+        // Either direction substring: "&ME" ↔ "me", "A$AP Rocky" ↔ "aap"
         return n.includes(artistNorm) || artistNorm.includes(n);
       });
+    }
+
+    function trackMatches(track: SpotifyTrack): boolean {
+      const n = normalize(track.name);
+      // Substring in either direction handles "(feat. X)", "- Remastered", etc.
+      return n.includes(trackNorm) || trackNorm.includes(n);
     }
 
     // Strategy 1: field-filter search (works for most names)
@@ -125,7 +132,9 @@ class SpotifyClient {
         `track:${trackName} artist:${artistName}`,
         5
       );
-      const match1 = r1.tracks.items.find(artistMatches);
+      const match1 = r1.tracks.items.find(
+        (t) => artistMatches(t) && trackMatches(t)
+      );
       if (match1) return match1;
     } catch {
       /* fall through */
@@ -134,7 +143,9 @@ class SpotifyClient {
     // Strategy 2: plain text search (handles special chars like &, $, etc.)
     try {
       const r2 = await this.searchTracks(`${trackName} ${artistName}`, 5);
-      const match2 = r2.tracks.items.find(artistMatches);
+      const match2 = r2.tracks.items.find(
+        (t) => artistMatches(t) && trackMatches(t)
+      );
       if (match2) return match2;
     } catch {
       /* fall through */
