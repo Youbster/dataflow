@@ -299,8 +299,7 @@ ${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : ""}
 - Track duration: ${config.durationHint}
 - NO jarring energy jumps
 - 0% familiar — every track must be genuinely new to them
-
-ACCURACY: Only real Spotify tracks. Correct spelling. Reasons explain why it fits their taste territory.
+- SPOTIFY ACCURACY: Only suggest tracks you are 100% certain exist on Spotify with this exact name and artist. Never invent titles. When in doubt between versions, pick the most well-known studio release. Avoid obscure remixes, regional exclusives, or live versions unless you are certain they are on Spotify.
 
 Return ONLY valid JSON:
 {
@@ -355,8 +354,7 @@ ${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : "- Nothin
 - NO jarring energy jumps between consecutive tracks
 - Familiarity ratio: ~${familiarityPct}% familiar / ${100 - familiarityPct}% new
 - Language: ${languageNote}
-
-ACCURACY: Only real Spotify tracks. Correct spelling. Reasons specific to THIS user's taste.
+- SPOTIFY ACCURACY: Only suggest tracks you are 100% certain exist on Spotify with this exact name and artist. Never invent titles. When in doubt between versions, pick the most well-known studio release. Avoid obscure remixes, regional exclusives, or live versions unless you are certain they are on Spotify.
 
 Return ONLY valid JSON:
 {
@@ -403,9 +401,87 @@ Return ONLY valid JSON:
       })
     );
 
-    const tracks = verified.map((r) =>
-      r.status === "fulfilled" ? r.value : { ...result.tracks[0], spotifyTrackId: null, spotifyUri: null, albumImageUrl: null }
+    // Fix: use index `i` so failed tracks keep their own name/artist, not track[0]
+    const tracks = verified.map((r, i) =>
+      r.status === "fulfilled"
+        ? r.value
+        : { ...result.tracks[i], spotifyTrackId: null, spotifyUri: null, albumImageUrl: null }
     );
+
+    // ── Option B: auto-replace tracks that failed Spotify verification ────────
+    const failedEntries = tracks
+      .map((t, i) => ({ t, i }))
+      .filter(({ t }) => !t.spotifyTrackId);
+
+    if (failedEntries.length > 0) {
+      try {
+        const failedList = failedEntries
+          .map(({ t }, n) => `${n + 1}. "${t.trackName}" by ${t.artistName} (section: ${t.section})`)
+          .join("\n");
+
+        const replRes = await openai.chat.completions.create({
+          model: FAST_MODEL,
+          max_tokens: 800,
+          messages: [
+            { role: "system", content: MUSIC_EXPERT_SYSTEM },
+            {
+              role: "user",
+              content: `${failedEntries.length} track(s) from a ${mood} playlist couldn't be found on Spotify. Replace each with a DIFFERENT real track that:
+- Fills the same mood/energy role (same section type)
+- You are 100% certain exists on Spotify with this EXACT name and artist
+- Prefer well-known studio releases over live, remix, or obscure versions
+
+Tracks to replace:
+${failedList}
+
+Return ONLY valid JSON — same number of entries in the same order:
+{
+  "replacements": [
+    { "trackName": "exact Spotify track name", "artistName": "exact primary artist", "reason": "one sentence" }
+  ]
+}`,
+            },
+          ],
+        });
+
+        const replText = replRes.choices[0].message.content ?? "";
+        const replMatch = replText.match(/\{[\s\S]*\}/)?.[0];
+        if (replMatch) {
+          const replParsed = JSON.parse(replMatch) as {
+            replacements: { trackName: string; artistName: string; reason: string }[];
+          };
+
+          // Verify replacements in parallel
+          const replVerified = await Promise.allSettled(
+            replParsed.replacements.map(async (r) => ({
+              ...r,
+              found: await spotify.findTrack(r.trackName, r.artistName),
+            }))
+          );
+
+          // Slot verified replacements back in at the correct positions
+          for (let n = 0; n < failedEntries.length; n++) {
+            const slot = failedEntries[n];
+            const repl = replVerified[n];
+            if (repl?.status === "fulfilled" && repl.value.found) {
+              const f = repl.value.found;
+              tracks[slot.i] = {
+                ...tracks[slot.i],
+                trackName: repl.value.trackName,
+                artistName: repl.value.artistName,
+                reason: repl.value.reason,
+                spotifyTrackId: f.id,
+                spotifyUri: `spotify:track:${f.id}`,
+                albumImageUrl: f.album.images[0]?.url ?? null,
+              };
+            }
+          }
+        }
+      } catch (replErr) {
+        // Non-fatal — keep whatever tracks were already verified
+        console.error("[mood-playlist] Replacement call failed:", replErr);
+      }
+    }
 
     // Persist to generated_playlists so the Playlists page can show history
     let playlistId: string | null = null;

@@ -109,8 +109,21 @@ class SpotifyClient {
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+    // Strip common variant suffixes so "Song (feat. X)" matches "Song",
+    // "Song - Remastered" matches "Song", "[Radio Edit]" matches the original, etc.
+    const stripVariants = (s: string) =>
+      s
+        .replace(/\s*\([^)]*\)/g, "")   // remove (feat. X), (Remastered 2011), etc.
+        .replace(/\s*\[[^\]]*\]/g, "")  // remove [Radio Edit], [Bonus Track], etc.
+        .replace(
+          /\s*-\s*(remaster|radio|extended|original|club|live|acoustic|demo|instrumental|bonus|single|edit|version|mix).*/i,
+          ""
+        )
+        .trim();
+
     const artistNorm = normalize(artistName);
     const trackNorm = normalize(trackName);
+    const trackNormCore = normalize(stripVariants(trackName));
 
     function artistMatches(track: SpotifyTrack): boolean {
       return track.artists.some((a) => {
@@ -122,11 +135,16 @@ class SpotifyClient {
 
     function trackMatches(track: SpotifyTrack): boolean {
       const n = normalize(track.name);
-      // Substring in either direction handles "(feat. X)", "- Remastered", etc.
-      return n.includes(trackNorm) || trackNorm.includes(n);
+      const nCore = normalize(stripVariants(track.name));
+      // Full normalized match (substring either direction)
+      if (n.includes(trackNorm) || trackNorm.includes(n)) return true;
+      // Core match after stripping variants — handles mismatches like
+      // AI returns "Song (Original Mix)" but Spotify has "Song", or vice versa
+      if (nCore.includes(trackNormCore) || trackNormCore.includes(nCore)) return true;
+      return false;
     }
 
-    // Strategy 1: field-filter search (works for most names)
+    // Strategy 1: Spotify field-filter search (most precise)
     try {
       const r1 = await this.searchTracks(
         `track:${trackName} artist:${artistName}`,
@@ -149,6 +167,23 @@ class SpotifyClient {
       if (match2) return match2;
     } catch {
       /* fall through */
+    }
+
+    // Strategy 3: stripped track name (catches AI adding remix suffixes the
+    // real Spotify track doesn't have, e.g. "Song (Club Mix)" → search "Song")
+    if (trackNormCore !== trackNorm) {
+      try {
+        const r3 = await this.searchTracks(
+          `${stripVariants(trackName)} ${artistName}`,
+          5
+        );
+        const match3 = r3.tracks.items.find(
+          (t) => artistMatches(t) && trackMatches(t)
+        );
+        if (match3) return match3;
+      } catch {
+        /* fall through */
+      }
     }
 
     return null;

@@ -68,6 +68,7 @@ Create a "Rest My Ears" playlist — 12 tracks that:
 2. Still fit their taste (same artists are fine, just NOT the overplayed tracks themselves)
 3. Include a mix of familiar comfort tracks AND 3-4 genuine discoveries
 4. Have good flow — start gentle, build energy naturally
+5. SPOTIFY ACCURACY: Only suggest tracks you are 100% certain exist on Spotify with this exact name and artist. Never invent titles. Pick the most well-known studio release when in doubt. Avoid obscure remixes, live versions, or regional exclusives.
 
 Return ONLY valid JSON:
 {
