@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#121212"/>
+  <!-- Green glow -->
+  <circle cx="256" cy="256" r="180" fill="#1DB954" opacity="0.12"/>
+  <!-- Music note -->
+  <g fill="#1DB954">
+    <!-- Note head 1 -->
+    <ellipse cx="196" cy="318" rx="38" ry="28" transform="rotate(-15 196 318)"/>
+    <!-- Note head 2 -->
+    <ellipse cx="316" cy="290" rx="38" ry="28" transform="rotate(-15 316 290)"/>
+    <!-- Stem 1 -->
+    <rect x="228" y="162" width="14" height="162" rx="7"/>
+    <!-- Stem 2 -->
+    <rect x="348" y="134" width="14" height="162" rx="7"/>
+    <!-- Beam -->
+    <path d="M228 162 L362 134 L362 158 L228 186 Z"/>
+  </g>
+</svg>

@@ -242,3 +242,55 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* ─── PWA / Mobile app polish ─────────────────────────────────────────────── */
+
+/* Remove tap flash on all interactive elements (iOS Safari blue highlight) */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent rubber-band bounce on the root (app feels locked-in) */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* Safe area padding for notch / home bar (env() variables from viewport-fit=cover) */
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Bottom nav accounts for home bar on iPhone */
+@media (max-width: 767px) {
+  nav.fixed.bottom-0 {
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+  /* Main content clears the taller nav on devices with home bar */
+  main {
+    padding-bottom: calc(8rem + env(safe-area-inset-bottom)) !important;
+  }
+  /* Mini-player sits above bottom nav + home bar */
+  .glass-miniplayer {
+    bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Prevent text size adjustment when rotating (iOS) */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Smooth momentum scrolling on iOS for scrollable containers */
+.overflow-y-auto, .overflow-x-auto, .overflow-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* When running as installed PWA (standalone), hide any remaining browser chrome */
+@media (display-mode: standalone) {
+  /* Status bar area — topbar already has h-14, this just ensures no gap */
+  body {
+    padding-top: env(safe-area-inset-top);
+  }
+}
