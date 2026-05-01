@@ -537,36 +537,35 @@ export default function DashboardPage() {
             {(() => {
               const playableUris = playlist.tracks.filter((t) => t.spotifyUri).map((t) => t.spotifyUri!);
               return (
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                <div className="space-y-2">
+                  {/* Row 1: label + action buttons on the same line */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                       {generatedDiscovery && (
-                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-violet-400">
+                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-violet-400 shrink-0">
                           <Telescope className="w-3 h-3" /> Discovery
                         </span>
                       )}
                       {!generatedDiscovery && seedTrack ? (
                         <>
                           {seedTrack.albumImageUrl && (
-                            <img src={seedTrack.albumImageUrl} className="w-5 h-5 rounded shrink-0 object-cover" alt="" />
+                            <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />
                           )}
-                          <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest truncate">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate">
                             Based on {seedTrack.trackName}
                           </span>
                         </>
                       ) : !generatedDiscovery ? (
-                        <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[220px]">
-                          &ldquo;{promptText.length > 50 ? promptText.slice(0, 50) + "…" : promptText}&rdquo;
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[160px]">
+                          &ldquo;{promptText.length > 40 ? promptText.slice(0, 40) + "…" : promptText}&rdquo;
                         </span>
                       ) : null}
-                      <span className="text-muted-foreground/30 text-xs">·</span>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-muted-foreground/30 text-[10px] shrink-0">·</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
                         {sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}
                       </span>
                     </div>
-                    <p className="text-sm text-muted-foreground italic leading-relaxed">{playlist.intro}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                    <div className="flex items-center gap-1.5 shrink-0">
                     {playableUris.length > 0 && <PlayOnSpotify uris={playableUris} label="Play" />}
                     {playableUris.length > 0 && (
                       <button
@@ -589,6 +588,11 @@ export default function DashboardPage() {
                       New
                     </button>
                   </div>
+                  </div>
+                  {/* Row 2: intro — full width, clamped to 2 lines */}
+                  <p className="text-xs text-muted-foreground italic leading-relaxed line-clamp-2">
+                    {playlist.intro}
+                  </p>
                 </div>
               );
             })()}
