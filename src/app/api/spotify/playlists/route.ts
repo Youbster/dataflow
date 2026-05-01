@@ -40,12 +40,21 @@ export async function POST(request: Request) {
       body: JSON.stringify({ name, description: description || "", public: false }),
     }) as { id: string; external_urls: { spotify: string } };
 
+    // Add tracks — if this fails, delete the empty playlist so Spotify stays clean
     const batchSize = 100;
-    for (let i = 0; i < trackUris.length; i += batchSize) {
-      await spotifyFetch(`/playlists/${playlist.id}/tracks`, token, {
-        method: "POST",
-        body: JSON.stringify({ uris: trackUris.slice(i, i + batchSize) }),
-      });
+    try {
+      for (let i = 0; i < trackUris.length; i += batchSize) {
+        await spotifyFetch(`/playlists/${playlist.id}/tracks`, token, {
+          method: "POST",
+          body: JSON.stringify({ uris: trackUris.slice(i, i + batchSize) }),
+        });
+      }
+    } catch (trackErr) {
+      // Best-effort cleanup: unfollow (delete) the empty playlist before re-throwing
+      try {
+        await spotifyFetch(`/playlists/${playlist.id}/followers`, token, { method: "DELETE" });
+      } catch { /* ignore cleanup error */ }
+      throw trackErr;
     }
 
     const admin = createAdminClient();

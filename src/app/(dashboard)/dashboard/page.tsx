@@ -333,9 +333,9 @@ export default function DashboardPage() {
       if (!res.ok) {
         if (data.code === "scope_missing") {
           toast.error("Spotify playlist access not granted", {
-            description: "Reconnect your Spotify account in Settings to fix this.",
-            action: { label: "Settings", onClick: () => router.push("/settings") },
-            duration: 8000,
+            description: "Your token is missing playlist permissions. Reconnect to fix this.",
+            action: { label: "Reconnect now", onClick: () => { window.location.href = "/api/spotify/reconnect"; } },
+            duration: 10000,
           });
         } else {
           throw new Error(data.error || "Failed to save");
