@@ -256,25 +256,17 @@ Return ONLY valid JSON:
       tracks: { trackName: string; artistName: string; section: string; reason: string }[];
     };
 
-    // Verify tracks on Spotify in parallel — attach IDs so the client can play directly
+    // Verify tracks on Spotify in parallel — artist-validated to avoid wrong matches
     const spotify = createSpotifyClient(user.id);
     const verified = await Promise.allSettled(
       result.tracks.map(async (track) => {
-        try {
-          const res = await spotify.searchTracks(
-            `track:${track.trackName} artist:${track.artistName}`,
-            1
-          );
-          const found = res.tracks.items[0];
-          return {
-            ...track,
-            spotifyTrackId: found?.id ?? null,
-            spotifyUri: found ? `spotify:track:${found.id}` : null,
-            albumImageUrl: found?.album.images[0]?.url ?? null,
-          };
-        } catch {
-          return { ...track, spotifyTrackId: null, spotifyUri: null, albumImageUrl: null };
-        }
+        const found = await spotify.findTrack(track.trackName, track.artistName);
+        return {
+          ...track,
+          spotifyTrackId: found?.id ?? null,
+          spotifyUri: found ? `spotify:track:${found.id}` : null,
+          albumImageUrl: found?.album.images[0]?.url ?? null,
+        };
       })
     );
 

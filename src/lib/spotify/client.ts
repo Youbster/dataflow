@@ -93,6 +93,56 @@ class SpotifyClient {
     );
   }
 
+  /**
+   * Find a specific track by name + artist with artist validation.
+   * Uses two strategies so special characters in artist names (e.g. &ME, A$AP)
+   * don't silently match the wrong song.
+   *
+   * Strategy 1: Spotify field-filter search, validate artist from top 5 results.
+   * Strategy 2: Plain-text search, same validation (catches &, $, etc. that break filters).
+   * Returns null if no validated match is found.
+   */
+  async findTrack(
+    trackName: string,
+    artistName: string
+  ): Promise<SpotifyTrack | null> {
+    const normalize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+    const artistNorm = normalize(artistName);
+
+    function artistMatches(track: SpotifyTrack): boolean {
+      return track.artists.some((a) => {
+        const n = normalize(a.name);
+        // Either direction substring is fine: "&ME" ↔ "me", "A$AP Rocky" ↔ "aap"
+        return n.includes(artistNorm) || artistNorm.includes(n);
+      });
+    }
+
+    // Strategy 1: field-filter search (works for most names)
+    try {
+      const r1 = await this.searchTracks(
+        `track:${trackName} artist:${artistName}`,
+        5
+      );
+      const match1 = r1.tracks.items.find(artistMatches);
+      if (match1) return match1;
+    } catch {
+      /* fall through */
+    }
+
+    // Strategy 2: plain text search (handles special chars like &, $, etc.)
+    try {
+      const r2 = await this.searchTracks(`${trackName} ${artistName}`, 5);
+      const match2 = r2.tracks.items.find(artistMatches);
+      if (match2) return match2;
+    } catch {
+      /* fall through */
+    }
+
+    return null;
+  }
+
   async createPlaylist(
     spotifyUserId: string,
     name: string,

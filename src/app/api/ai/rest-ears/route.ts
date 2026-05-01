@@ -100,15 +100,11 @@ Return ONLY valid JSON:
       tracks: { trackName: string; artistName: string; reason: string }[];
     };
 
-    // Verify tracks on Spotify in parallel
+    // Verify tracks on Spotify in parallel — artist-validated to avoid wrong matches
     const spotify = createSpotifyClient(user.id);
     const results = await Promise.allSettled(
       parsed.tracks.map(async (track) => {
-        const result = await spotify.searchTracks(
-          `track:${track.trackName} artist:${track.artistName}`,
-          1
-        );
-        const found = result.tracks.items[0];
+        const found = await spotify.findTrack(track.trackName, track.artistName);
         if (!found) return null;
         return {
           ...track,

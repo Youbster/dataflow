@@ -72,11 +72,7 @@ export async function suggestFreshAlternatives(
   for (const suggestion of parsed.suggestions) {
     for (const alt of suggestion.alternatives) {
       try {
-        const result = await spotify.searchTracks(
-          `track:${alt.trackName} artist:${alt.artistName}`,
-          1
-        );
-        const found = result.tracks.items[0];
+        const found = await spotify.findTrack(alt.trackName, alt.artistName);
         if (found) {
           alt.spotifyTrackId = found.id;
           alt.spotifyUri = found.uri;
