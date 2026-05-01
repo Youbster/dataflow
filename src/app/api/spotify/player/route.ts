@@ -7,13 +7,19 @@ const BASE = "https://api.spotify.com/v1/me/player";
 async function spotifyFetch(url: string, token: string, options: RequestInit = {}) {
   return fetch(url, {
     ...options,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...options.headers },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
   });
 }
 
 export async function GET() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -34,40 +40,63 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { action, trackId } = await request.json().catch(() => ({}));
+  const payload = await request.json().catch(() => ({}));
+  const { action, trackId, uris, device_id } = payload;
 
   try {
     const token = await getValidSpotifyToken(user.id);
 
     let url = "";
     let method = "PUT";
-    let body: string | undefined;
+    let fetchBody: string | undefined;
 
     switch (action) {
       case "play":
         url = `${BASE}/play`;
-        if (trackId) body = JSON.stringify({ uris: [`spotify:track:${trackId}`] });
+        if (trackId) fetchBody = JSON.stringify({ uris: [`spotify:track:${trackId}`] });
         break;
+
+      case "play_uris":
+        if (!Array.isArray(uris) || uris.length === 0) {
+          return NextResponse.json({ error: "uris required" }, { status: 400 });
+        }
+        url = `${BASE}/play${device_id ? `?device_id=${encodeURIComponent(device_id)}` : ""}`;
+        fetchBody = JSON.stringify({ uris });
+        break;
+
       case "pause":
         url = `${BASE}/pause`;
         break;
+
       case "next":
         url = `${BASE}/next`;
         method = "POST";
         break;
+
       case "previous":
         url = `${BASE}/previous`;
         method = "POST";
         break;
+
       default:
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
 
-    const res = await spotifyFetch(url, token, { method, body });
-    if (res.status === 403) return NextResponse.json({ error: "scope_missing" }, { status: 403 });
+    const res = await spotifyFetch(url, token, { method, body: fetchBody });
+
+    if (res.status === 403) {
+      const body = await res.text();
+      const isPremium = body.toLowerCase().includes("premium");
+      return NextResponse.json(
+        { error: isPremium ? "premium_required" : "scope_missing" },
+        { status: 403 }
+      );
+    }
     if (!res.ok && res.status !== 204) {
       const err = await res.text();
       return NextResponse.json({ error: err }, { status: res.status });

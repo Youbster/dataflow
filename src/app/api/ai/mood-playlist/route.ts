@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { openai, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
+import { createSpotifyClient } from "@/lib/spotify/client";
 
 interface MoodConfig {
   familiarityPct: number;
@@ -250,8 +251,38 @@ Return ONLY valid JSON:
     const match = text.match(/\{[\s\S]*\}/)?.[0];
     if (!match) throw new Error("AI returned invalid response");
 
-    const result = JSON.parse(match);
-    return NextResponse.json(result);
+    const result = JSON.parse(match) as {
+      intro: string;
+      tracks: { trackName: string; artistName: string; section: string; reason: string }[];
+    };
+
+    // Verify tracks on Spotify in parallel — attach IDs so the client can play directly
+    const spotify = createSpotifyClient(user.id);
+    const verified = await Promise.allSettled(
+      result.tracks.map(async (track) => {
+        try {
+          const res = await spotify.searchTracks(
+            `track:${track.trackName} artist:${track.artistName}`,
+            1
+          );
+          const found = res.tracks.items[0];
+          return {
+            ...track,
+            spotifyTrackId: found?.id ?? null,
+            spotifyUri: found ? `spotify:track:${found.id}` : null,
+            albumImageUrl: found?.album.images[0]?.url ?? null,
+          };
+        } catch {
+          return { ...track, spotifyTrackId: null, spotifyUri: null, albumImageUrl: null };
+        }
+      })
+    );
+
+    const tracks = verified.map((r) =>
+      r.status === "fulfilled" ? r.value : { ...result.tracks[0], spotifyTrackId: null, spotifyUri: null, albumImageUrl: null }
+    );
+
+    return NextResponse.json({ intro: result.intro, tracks });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate playlist";
     return NextResponse.json({ error: message }, { status: 500 });

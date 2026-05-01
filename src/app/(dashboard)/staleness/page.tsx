@@ -7,7 +7,6 @@ import { SpotifyImage } from "@/components/shared/spotify-image";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  AlertTriangle,
   Sparkles,
   Loader2,
   TrendingUp,
@@ -25,6 +24,7 @@ import {
 import { toast } from "sonner";
 import type { StalenessResult, StalenessHealth } from "@/lib/staleness/types";
 import { cn } from "@/lib/utils";
+import { PlayOnSpotify } from "@/components/shared/play-on-spotify";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -188,6 +188,10 @@ function RestEarsPanel({
   tracks: RestTrack[];
   onClose: () => void;
 }) {
+  const playableUris = tracks
+    .filter((t) => t.spotifyTrackId)
+    .map((t) => `spotify:track:${t.spotifyTrackId}`);
+
   return (
     <div className="glass-card rounded-2xl border border-white/[0.07] p-5 space-y-4">
       <div className="flex items-center justify-between">
@@ -195,12 +199,17 @@ function RestEarsPanel({
           <Headphones className="w-4 h-4 text-primary" />
           <span className="font-semibold text-sm">Rest My Ears Playlist</span>
         </div>
-        <button
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {playableUris.length > 0 && (
+            <PlayOnSpotify uris={playableUris} label="Play All" />
+          )}
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {intro && (

@@ -100,31 +100,26 @@ Return ONLY valid JSON:
       tracks: { trackName: string; artistName: string; reason: string }[];
     };
 
-    // Verify tracks exist on Spotify
+    // Verify tracks on Spotify in parallel
     const spotify = createSpotifyClient(user.id);
-    const verified: typeof parsed.tracks & {
-      spotifyTrackId?: string;
-      albumImageUrl?: string;
-    }[] = [];
-
-    for (const track of parsed.tracks) {
-      try {
+    const results = await Promise.allSettled(
+      parsed.tracks.map(async (track) => {
         const result = await spotify.searchTracks(
           `track:${track.trackName} artist:${track.artistName}`,
           1
         );
         const found = result.tracks.items[0];
-        if (found) {
-          verified.push({
-            ...track,
-            spotifyTrackId: found.id,
-            albumImageUrl: found.album.images[0]?.url,
-          });
-        }
-      } catch {
-        // Skip unverified tracks
-      }
-    }
+        if (!found) return null;
+        return {
+          ...track,
+          spotifyTrackId: found.id,
+          albumImageUrl: found.album.images[0]?.url ?? null,
+        };
+      })
+    );
+
+    const verified = results
+      .flatMap((r) => (r.status === "fulfilled" && r.value !== null ? [r.value] : []));
 
     return NextResponse.json({ intro: parsed.intro, tracks: verified });
   } catch (err) {

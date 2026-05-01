@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+import { PlayOnSpotify } from "@/components/shared/play-on-spotify";
 
 // ─── Mood picker config ────────────────────────────────────────────────────
 const MOODS = [
@@ -46,6 +47,9 @@ interface MoodTrack {
   artistName: string;
   section: "anchor" | "groove" | "discovery";
   reason: string;
+  spotifyTrackId?: string | null;
+  spotifyUri?: string | null;
+  albumImageUrl?: string | null;
 }
 
 interface MoodPlaylist {
@@ -313,29 +317,41 @@ export default function DashboardPage() {
         {moodPhase === "result" && moodPlaylist && activeMood && (
           <div className="p-6 space-y-6">
             {/* Header */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1.5 flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xl">{activeMood.emoji}</span>
-                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                    {activeMood.label}
-                  </span>
-                  <span className="text-muted-foreground/40 text-xs">·</span>
-                  <span className="text-xs text-muted-foreground capitalize">{intensity} intensity</span>
-                  <span className="text-muted-foreground/40 text-xs">·</span>
-                  <span className="text-xs text-muted-foreground">
-                    {sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}
-                  </span>
+            {(() => {
+              const playableUris = moodPlaylist.tracks
+                .filter((t) => t.spotifyUri)
+                .map((t) => t.spotifyUri!);
+              return (
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1.5 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xl">{activeMood.emoji}</span>
+                      <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                        {activeMood.label}
+                      </span>
+                      <span className="text-muted-foreground/40 text-xs">·</span>
+                      <span className="text-xs text-muted-foreground capitalize">{intensity} intensity</span>
+                      <span className="text-muted-foreground/40 text-xs">·</span>
+                      <span className="text-xs text-muted-foreground">
+                        {sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed italic">{moodPlaylist.intro}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {playableUris.length > 0 && (
+                      <PlayOnSpotify uris={playableUris} label="Play All" />
+                    )}
+                    <button
+                      onClick={resetMood}
+                      className="text-xs px-3 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+                    >
+                      New vibe
+                    </button>
+                  </div>
                 </div>
-                <p className="text-sm text-muted-foreground leading-relaxed italic">{moodPlaylist.intro}</p>
-              </div>
-              <button
-                onClick={resetMood}
-                className="shrink-0 text-xs px-3 py-1.5 rounded-full border border-border bg-accent/50 text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
-              >
-                New vibe
-              </button>
-            </div>
+              );
+            })()}
 
             {/* Track sections */}
             {(["anchor", "groove", "discovery"] as const).map((section) => {
@@ -352,14 +368,26 @@ export default function DashboardPage() {
                     {sectionTracks.map((t, i) => (
                       <a
                         key={i}
-                        href={`https://open.spotify.com/search/${encodeURIComponent(`${t.trackName} ${t.artistName}`)}`}
+                        href={
+                          t.spotifyTrackId
+                            ? `https://open.spotify.com/track/${t.spotifyTrackId}`
+                            : `https://open.spotify.com/search/${encodeURIComponent(`${t.trackName} ${t.artistName}`)}`
+                        }
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-start gap-3 rounded-xl bg-accent/30 hover:bg-accent border border-transparent hover:border-border/60 p-3 transition-all group"
+                        className="flex items-center gap-3 rounded-xl bg-accent/30 hover:bg-accent border border-transparent hover:border-border/60 p-3 transition-all group"
                       >
-                        <div className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${meta.bg} ${meta.color}`}>
-                          {i + 1}
-                        </div>
+                        {t.albumImageUrl ? (
+                          <img
+                            src={t.albumImageUrl}
+                            alt={t.trackName}
+                            className="w-10 h-10 rounded-lg object-cover shrink-0"
+                          />
+                        ) : (
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 text-[11px] font-bold ${meta.bg} ${meta.color}`}>
+                            {i + 1}
+                          </div>
+                        )}
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-sm group-hover:text-primary transition-colors leading-snug">
                             {t.trackName}{" "}
@@ -367,7 +395,7 @@ export default function DashboardPage() {
                           </p>
                           <p className="text-xs text-muted-foreground/70 mt-0.5 italic leading-relaxed">{t.reason}</p>
                         </div>
-                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 mt-0.5 transition-colors" />
+                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 transition-colors" />
                       </a>
                     ))}
                   </div>
