@@ -30,7 +30,14 @@
       "Bash(git commit -m 'Fix: use session provider_token directly for playlist creation to ensure correct scopes *)",
       "Bash(git commit -m 'Fix: replace CSS var colors with hardcoded hex in Recharts SVG elements *)",
       "Bash(git commit -m 'Add Discover page: music identity, listening patterns, hidden gems, taste evolution, artist deep dive *)",
-      "Bash(git commit -m 'Add Weekly Vibe Forecast \\(weather + AI\\) and dynamic Burnout Alert with Sonic Palate Cleanser *)"
+      "Bash(git commit -m 'Add Weekly Vibe Forecast \\(weather + AI\\) and dynamic Burnout Alert with Sonic Palate Cleanser *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git commit -m 'Fix TS error: replace invalid ringColor style with outline on artist image *)",
+      "Bash(xargs cat *)",
+      "Bash(sed -n '45,60p' /Users/ayoub/Downloads/dataflow/src/app/\\\\\\(dashboard\\\\\\)/dashboard/page.tsx)",
+      "Bash(sed -n '160,200p' /Users/ayoub/Downloads/dataflow/src/app/\\\\\\(dashboard\\\\\\)/dashboard/page.tsx)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(git rm *)"
     ]
   }
 }
