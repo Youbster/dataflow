@@ -205,7 +205,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Mood Section ───────────────────────────────────────────── */}
-      <div className="rounded-3xl border border-border bg-card overflow-hidden">
+      <div className="rounded-3xl border border-border bg-card">
 
         {/* PICK */}
         {moodPhase === "pick" && (

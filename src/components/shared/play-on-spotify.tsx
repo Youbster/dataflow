@@ -142,7 +142,7 @@ export function PlayOnSpotify({
 
       {/* Device picker dropdown */}
       {status === "picking" && devices.length > 0 && (
-        <div className="absolute bottom-full mb-2 left-0 z-50 min-w-[210px] glass-card rounded-xl border border-white/[0.08] p-1.5 shadow-xl">
+        <div className="absolute top-full mt-2 right-0 z-[100] min-w-[210px] glass-card rounded-xl border border-white/[0.08] p-1.5 shadow-xl">
           <p className="text-[10px] text-muted-foreground px-2.5 py-1.5 uppercase tracking-wider">
             Choose a device
           </p>
