@@ -98,7 +98,7 @@ export function MiniPlayer() {
   };
 
   return (
-    <div className="glass-miniplayer fixed bottom-0 left-0 right-0 md:left-60 z-50">
+    <div className="glass-miniplayer fixed bottom-14 md:bottom-0 left-0 right-0 md:left-60 z-50">
       {/* Progress bar */}
       <div className="h-[2px] bg-white/[0.06]">
         <div

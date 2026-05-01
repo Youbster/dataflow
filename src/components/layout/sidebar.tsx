@@ -4,18 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  BarChart3, ListMusic, AlertTriangle, Users,
-  Settings, Music, Sparkles, Gift, Package,
+  BarChart3, ListMusic, Activity, Users,
+  Settings, Music, Sparkles,
 } from "lucide-react";
 
 const mainNav = [
-  { href: "/dashboard", label: "Dashboard",   icon: BarChart3    },
-  { href: "/discover",  label: "Discover",     icon: Sparkles     },
-  { href: "/wrapped",   label: "Wrapped",      icon: Gift         },
-  { href: "/mystery",   label: "Mystery Box",  icon: Package      },
-  { href: "/playlists", label: "Playlists",    icon: ListMusic    },
-  { href: "/staleness", label: "Staleness",    icon: AlertTriangle },
-  { href: "/social",    label: "Social",       icon: Users        },
+  { href: "/dashboard", label: "Home",       icon: BarChart3 },
+  { href: "/discover",  label: "Insights",   icon: Sparkles  },
+  { href: "/playlists", label: "Playlists",  icon: ListMusic },
+  { href: "/staleness", label: "Ear Health", icon: Activity  },
+  { href: "/social",    label: "Social",     icon: Users     },
 ];
 
 export function Sidebar() {

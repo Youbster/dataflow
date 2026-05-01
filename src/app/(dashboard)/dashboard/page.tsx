@@ -5,11 +5,11 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  RefreshCw, Send, Sparkles, Gift, ListMusic, Flame,
-  ArrowRight, Loader2, ExternalLink, ArrowLeft, Heart, Check,
+  RefreshCw, Send, Sparkles, Flame,
+  Loader2, ExternalLink, ArrowLeft, Heart, Check,
+  Package, Star,
 } from "lucide-react";
 import { toast } from "sonner";
-import Link from "next/link";
 import { PlayOnSpotify } from "@/components/shared/play-on-spotify";
 
 // ─── Mood picker config ────────────────────────────────────────────────────
@@ -82,6 +82,15 @@ interface PromptResult {
   tracks?: { trackName: string; artistName: string; reason: string }[];
 }
 
+interface MysteryBox {
+  track_name: string;
+  artist_name: string;
+  reason: string;
+  is_golden: boolean;
+  streak_count: number;
+  claimed: boolean;
+}
+
 // ─── Component ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   // existing state
@@ -109,11 +118,17 @@ export default function DashboardPage() {
   const [savedToSpotify, setSavedToSpotify] = useState(false);
   const [isSaving, setIsSaving]             = useState(false);
 
+  // mystery box
+  const [mystery, setMystery]           = useState<MysteryBox | null>(null);
+  const [mysteryLoading, setMysteryLoading] = useState(true);
+  const [mysteryClaiming, setMysteryClaiming] = useState(false);
+
   useEffect(() => {
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
     loadUser();
     syncThenLoad();
+    loadMystery();
   }, []);
 
   async function loadUser() {
@@ -121,6 +136,28 @@ export default function DashboardPage() {
     const { data: { user } } = await supabase.auth.getUser();
     const name = user?.user_metadata?.full_name?.split(" ")[0] ?? user?.email?.split("@")[0] ?? "";
     setUserName(name);
+  }
+
+  async function loadMystery() {
+    setMysteryLoading(true);
+    try {
+      const res = await fetch("/api/mystery");
+      if (res.ok) setMystery(await res.json());
+    } catch { /* silent */ }
+    finally { setMysteryLoading(false); }
+  }
+
+  async function claimMystery() {
+    if (!mystery || mystery.claimed || mysteryClaiming) return;
+    setMysteryClaiming(true);
+    try {
+      const res = await fetch("/api/mystery/claim", { method: "POST" });
+      if (res.ok) {
+        setMystery((m) => m ? { ...m, claimed: true } : m);
+        toast.success("Mystery track claimed! 🎵");
+      }
+    } catch { /* silent */ }
+    finally { setMysteryClaiming(false); }
   }
 
   async function syncThenLoad() {
@@ -256,6 +293,38 @@ export default function DashboardPage() {
           {syncing ? "Syncing…" : "Sync"}
         </Button>
       </div>
+
+      {/* ── Mystery Box ────────────────────────────────────────────── */}
+      {mysteryLoading ? (
+        <div className="h-24 rounded-2xl bg-card border border-border animate-pulse" />
+      ) : mystery ? (
+        <div className={`rounded-2xl border p-4 flex items-start gap-4 ${mystery.is_golden ? "border-yellow-500/40 bg-gradient-to-r from-yellow-500/10 to-amber-500/5" : "border-primary/20 bg-gradient-to-r from-primary/5 to-transparent"}`}>
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${mystery.is_golden ? "bg-yellow-500/20" : "bg-primary/15"}`}>
+            {mystery.is_golden
+              ? <Star className="w-5 h-5 text-yellow-400" strokeWidth={2} />
+              : <Package className="w-5 h-5 text-primary" strokeWidth={2} />
+            }
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className={`text-xs font-semibold uppercase tracking-wider ${mystery.is_golden ? "text-yellow-400" : "text-primary"}`}>
+                {mystery.is_golden ? `⭐ Golden Track — Day ${mystery.streak_count} streak` : `🎁 Today's Mystery Track · ${mystery.streak_count} day streak`}
+              </p>
+            </div>
+            <p className="font-semibold mt-0.5 truncate">{mystery.track_name}
+              <span className="font-normal text-muted-foreground"> · {mystery.artist_name}</span>
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{mystery.reason}</p>
+          </div>
+          <button
+            onClick={claimMystery}
+            disabled={mystery.claimed || mysteryClaiming}
+            className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${mystery.claimed ? "bg-primary/10 text-primary cursor-default" : mystery.is_golden ? "bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30" : "bg-primary/15 text-primary hover:bg-primary/25"}`}
+          >
+            {mystery.claimed ? "✓ Claimed" : mysteryClaiming ? "…" : "Claim"}
+          </button>
+        </div>
+      ) : null}
 
       {/* ── Mood Section ───────────────────────────────────────────── */}
       <div className="rounded-3xl border border-border bg-card">
@@ -732,31 +801,6 @@ export default function DashboardPage() {
           )}
         </>
       ) : null}
-
-      {/* ── Explore ────────────────────────────────────────────────── */}
-      <div className="space-y-3">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Explore</p>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Link href="/wrapped" className="group rounded-2xl bg-gradient-to-br from-violet-950 to-violet-900 border border-violet-800/50 p-5 hover:border-violet-600 transition-all block">
-            <Gift className="w-6 h-6 text-violet-400 mb-3" />
-            <p className="font-semibold text-white">Monthly Wrapped</p>
-            <p className="text-xs text-violet-300/60 mt-1">Your music story this month</p>
-            <ArrowRight className="w-4 h-4 text-violet-400 mt-4 group-hover:translate-x-1 transition-transform" />
-          </Link>
-          <Link href="/discover" className="group rounded-2xl bg-gradient-to-br from-emerald-950 to-emerald-900 border border-emerald-800/50 p-5 hover:border-emerald-600 transition-all block">
-            <Sparkles className="w-6 h-6 text-emerald-400 mb-3" />
-            <p className="font-semibold text-white">Discover</p>
-            <p className="text-xs text-emerald-300/60 mt-1">Your music identity & hidden gems</p>
-            <ArrowRight className="w-4 h-4 text-emerald-400 mt-4 group-hover:translate-x-1 transition-transform" />
-          </Link>
-          <Link href="/playlists" className="group rounded-2xl bg-gradient-to-br from-blue-950 to-blue-900 border border-blue-800/50 p-5 hover:border-blue-600 transition-all block">
-            <ListMusic className="w-6 h-6 text-blue-400 mb-3" />
-            <p className="font-semibold text-white">AI Playlists</p>
-            <p className="text-xs text-blue-300/60 mt-1">Generate a playlist from any mood</p>
-            <ArrowRight className="w-4 h-4 text-blue-400 mt-4 group-hover:translate-x-1 transition-transform" />
-          </Link>
-        </div>
-      </div>
 
     </div>
   );
