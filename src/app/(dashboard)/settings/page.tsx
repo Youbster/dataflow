@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Save, LogOut, RefreshCw } from "lucide-react";
-import { SPOTIFY_SCOPES } from "@/lib/constants";
 import { toast } from "sonner";
 import type { UserProfile } from "@/types/database";
 
 export default function SettingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,6 +23,18 @@ export default function SettingsPage() {
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
   const [isPublic, setIsPublic] = useState(false);
+
+  // Show toast on reconnect result
+  useEffect(() => {
+    const reconnect = searchParams.get("reconnect");
+    if (reconnect === "success") {
+      toast.success("Spotify reconnected! Playlist saving should now work.");
+      router.replace("/settings");
+    } else if (reconnect === "failed") {
+      toast.error("Reconnect failed. Try again or check your Spotify app settings.");
+      router.replace("/settings");
+    }
+  }, [searchParams, router]);
 
   useEffect(() => {
     async function load() {
@@ -84,19 +96,10 @@ export default function SettingsPage() {
     router.push("/login");
   }
 
-  async function handleReconnectSpotify() {
-    const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
-      provider: "spotify",
-      options: {
-        scopes: SPOTIFY_SCOPES,
-        redirectTo: `${window.location.origin}/api/auth/callback`,
-        queryParams: {
-          // Force Spotify to show the permissions dialog so new scopes are granted
-          show_dialog: "true",
-        },
-      },
-    });
+  function handleReconnectSpotify() {
+    // Use the dedicated reconnect route which bypasses Supabase's session
+    // management and stores fresh Spotify tokens directly — guarantees scopes.
+    window.location.href = "/api/spotify/reconnect";
   }
 
   if (loading) {
@@ -183,7 +186,7 @@ export default function SettingsPage() {
           </div>
           <div className="border-t border-border pt-4">
             <p className="text-xs text-muted-foreground mb-3">
-              If playback control isn&apos;t working, reconnect to grant the latest permissions.
+              If playlist saving or playback control isn&apos;t working, reconnect to grant the latest permissions.
             </p>
             <Button variant="outline" size="sm" onClick={handleReconnectSpotify}>
               <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
