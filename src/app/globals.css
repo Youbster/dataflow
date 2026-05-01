@@ -193,6 +193,10 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   /* Subtle ambient gradient — gives glass layers something to blur through */
   .dark body {
@@ -202,5 +206,16 @@
   }
   html {
     @apply font-sans scroll-smooth;
+  }
+
+  /* Headings — tighter tracking, heavier presence */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+
+  /* Numbers — tabular, consistent width */
+  .tabular, [data-tabular], .font-bold, .font-black {
+    font-variant-numeric: tabular-nums;
   }
 }
