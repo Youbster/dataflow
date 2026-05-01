@@ -105,13 +105,11 @@ export function PlayOnSpotify({
       return;
     }
 
-    const active = devs.find((d) => d.is_active);
-
-    if (active) {
-      await play(active.id);
-    } else if (devs.length === 1) {
+    if (devs.length === 1) {
+      // Only one device — no choice to make, just play
       await play(devs[0].id);
     } else {
+      // Multiple devices — always let user pick so they control where music plays
       setStatus("picking");
     }
   }

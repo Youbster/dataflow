@@ -26,11 +26,16 @@ export function MiniPlayer() {
   const fetchState = useCallback(async () => {
     try {
       const res = await fetch("/api/spotify/player");
-      const data = await res.json();
-      if (!res.ok) {
-        console.warn("[MiniPlayer] API error:", res.status, data);
+      // 401/403 = token scope issue — don't spam, just skip silently
+      if (res.status === 401 || res.status === 403) {
+        console.warn("[MiniPlayer] auth error", res.status, "— reconnect Spotify in Settings");
         return;
       }
+      if (!res.ok) {
+        console.warn("[MiniPlayer] API error:", res.status);
+        return;
+      }
+      const data = await res.json();
       console.log("[MiniPlayer] state:", data?.item?.name ?? "nothing playing");
       setState(data as PlaybackState | null);
       if ((data as PlaybackState)?.progress_ms !== undefined) {
