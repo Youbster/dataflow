@@ -207,17 +207,20 @@ export default function DashboardPage() {
           <div className="p-4 space-y-4">
 
             {/* Section label + sync */}
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                {homeData?.vibe
-                  ? `Your week: ${homeData.vibe.word.toLowerCase()} — pick a mood`
-                  : "Pick a mood"}
-              </p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-base font-bold leading-tight">Generate a playlist</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {homeData?.vibe
+                    ? `Your week has been ${homeData.vibe.word.toLowerCase()} — pick a mood to match`
+                    : "Pick a mood and we'll build one for you"}
+                </p>
+              </div>
               <button
                 onClick={handleSync}
                 disabled={syncing}
                 title="Sync from Spotify"
-                className="text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1"
+                className="text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1 mt-0.5 shrink-0"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
               </button>
@@ -493,60 +496,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ── Stats + Tracks ──────────────────────────────────────────────────── */}
-      {homeLoading ? (
-        <div className="space-y-3">
-          <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
-            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl min-w-[120px] shrink-0" />)}
-          </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
-          </div>
-        </div>
-      ) : homeData ? (
-        <>
-          {/* Stat strip */}
-          <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible scrollbar-none">
-            {[
-              { label: "Plays",    value: homeData.stats.playsThisWeek },
-              { label: "Minutes",  value: homeData.stats.estimatedMinutes.toLocaleString() },
-              { label: "Artists",  value: homeData.stats.uniqueArtists },
-              { label: "Top genre", value: homeData.stats.topGenre ?? "—" },
-            ].map(({ label, value }) => (
-              <div key={label} className="rounded-2xl bg-card border border-border p-3.5 min-w-[110px] shrink-0 md:min-w-0 md:shrink">
-                <p className="text-xl font-bold truncate">{value}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Recent top tracks */}
-          {homeData.recentTopTracks.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">What you&apos;ve been playing</p>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {homeData.recentTopTracks.map((t, i) => (
-                  <a
-                    key={t.trackName}
-                    href={`spotify:track:${t.spotifyTrackId}`}
-                    className="flex items-center gap-3 rounded-xl bg-card border border-border p-2.5 hover:border-primary/40 hover:bg-accent/50 transition-colors group"
-                  >
-                    {t.albumImageUrl
-                      ? <img src={t.albumImageUrl} alt={t.trackName} className="w-10 h-10 rounded-md object-cover shrink-0" />
-                      : <div className="w-10 h-10 rounded-md bg-accent shrink-0" />}
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-sm truncate group-hover:text-primary transition-colors">{t.trackName}</p>
-                      <p className="text-xs text-muted-foreground truncate">{t.artistName}</p>
-                      {t.playCount > 1 && <p className="text-xs text-primary mt-0.5">{t.playCount}×</p>}
-                    </div>
-                    <span className="text-2xl font-black text-muted-foreground/10 shrink-0">{i + 1}</span>
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ) : null}
 
     </div>
   );

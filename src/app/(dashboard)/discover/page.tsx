@@ -13,6 +13,7 @@ import {
   Sparkles, RefreshCw, Search, Music, Clock, TrendingUp,
   Gem, ArrowRight, ChevronRight,
   Dna, Rewind, ChevronsUp, ChevronsDown, Minus,
+  BarChart2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -72,6 +73,22 @@ interface FlashbackTrack {
   trackName: string;
   artistName: string;
   note: string;
+}
+
+interface HomeStats {
+  stats: {
+    playsThisWeek: number;
+    estimatedMinutes: number;
+    uniqueArtists: number;
+    topGenre: string | null;
+  };
+  recentTopTracks: {
+    spotifyTrackId: string;
+    trackName: string;
+    artistName: string;
+    albumImageUrl: string | null;
+    playCount: number;
+  }[];
 }
 
 interface ArtistDive {
@@ -135,6 +152,8 @@ function gemPopularityLabel(popularity: number): string {
 // ---------------------------------------------------------------------------
 
 export default function DiscoverPage() {
+  const [homeStats, setHomeStats] = useState<HomeStats | null>(null);
+  const [homeStatsLoading, setHomeStatsLoading] = useState(true);
   const [profile, setProfile] = useState<DiscoverProfile | null>(null);
   const [hiddenGems, setHiddenGems] = useState<HiddenGem[]>([]);
   const [patterns, setPatterns] = useState<PatternData | null>(null);
@@ -151,6 +170,9 @@ export default function DiscoverPage() {
 
   // On mount: restore caches or auto-fetch
   useEffect(() => {
+    // --- Home stats ---
+    loadHomeStats();
+
     // --- Discover cache ---
     const cachedDiscover = loadCache<{
       profile: DiscoverProfile;
@@ -181,6 +203,15 @@ export default function DiscoverPage() {
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadHomeStats() {
+    setHomeStatsLoading(true);
+    try {
+      const res = await fetch("/api/ai/home");
+      if (res.ok) setHomeStats(await res.json());
+    } catch { /* silent */ }
+    finally { setHomeStatsLoading(false); }
+  }
 
   async function loadDna() {
     setDnaLoading(true);
@@ -278,6 +309,70 @@ export default function DiscoverPage() {
           {generated ? "Refresh Story" : "Generate My Story"}
         </Button>
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 1b. Stats strip + recent top tracks                                */}
+      {/* ------------------------------------------------------------------ */}
+      {homeStatsLoading ? (
+        <div className="space-y-3">
+          <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 rounded-2xl min-w-[110px] shrink-0" />
+            ))}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}
+          </div>
+        </div>
+      ) : homeStats ? (
+        <div className="space-y-4">
+          {/* Stat strip */}
+          <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible scrollbar-none">
+            {[
+              { label: "Plays this week", value: homeStats.stats.playsThisWeek, icon: BarChart2 },
+              { label: "Minutes",         value: homeStats.stats.estimatedMinutes.toLocaleString(), icon: Clock },
+              { label: "Artists",         value: homeStats.stats.uniqueArtists, icon: Music },
+              { label: "Top genre",       value: homeStats.stats.topGenre ?? "—", icon: TrendingUp },
+            ].map(({ label, value, icon: Icon }) => (
+              <div key={label} className="rounded-2xl bg-card border border-border p-3.5 min-w-[110px] shrink-0 md:min-w-0 md:shrink">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Icon className="w-3.5 h-3.5 text-primary/60" />
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{label}</p>
+                </div>
+                <p className="text-xl font-bold truncate">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* What you've been playing */}
+          {homeStats.recentTopTracks.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                What you&apos;ve been playing
+              </p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {homeStats.recentTopTracks.map((t, i) => (
+                  <a
+                    key={t.trackName}
+                    href={`spotify:track:${t.spotifyTrackId}`}
+                    className="flex items-center gap-3 rounded-xl bg-card border border-border p-2.5 hover:border-primary/40 hover:bg-accent/50 transition-colors group"
+                  >
+                    {t.albumImageUrl
+                      ? <img src={t.albumImageUrl} alt={t.trackName} className="w-10 h-10 rounded-md object-cover shrink-0" />
+                      : <div className="w-10 h-10 rounded-md bg-accent shrink-0" />}
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-sm truncate group-hover:text-primary transition-colors">{t.trackName}</p>
+                      <p className="text-xs text-muted-foreground truncate">{t.artistName}</p>
+                      {t.playCount > 1 && <p className="text-xs text-primary mt-0.5">{t.playCount}×</p>}
+                    </div>
+                    <span className="text-2xl font-black text-muted-foreground/10 shrink-0">{i + 1}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {/* ------------------------------------------------------------------ */}
       {/* 2. Loading skeletons                                                */}
