@@ -81,9 +81,10 @@ ${mostReplayedRecently || "no play log data yet"}
 IMPORTANT: Spotify's "long_term" data covers several years of listening history. Use it to answer questions about what they used to listen to, their all-time favourites, or nostalgia questions. Be honest if exact year-by-year data isn't available but infer from the long-term data what they likely listened to most in the past.
 
 Rules:
-- Songs/playlist/mood/activity request → type "tracks", 5-8 real Spotify tracks
-- Insight/explanation/nostalgia answer/conversational → type "insight"
-- Always reference their actual data — don't be generic
+- ALWAYS use type "tracks" when you are listing specific songs — playlists, moods, activities, nostalgia ("what did I used to listen to"), throwbacks, recommendations, "find me X"
+- Only use type "insight" for pure analysis or explanations with NO song list (e.g. "why do I like X genre", "how has my taste changed")
+- If returning nostalgia or throwback songs, pull directly from long_term data and list them as tracks
+- 5-8 tracks per response; always reference their actual data — never be generic
 - "message": warm 1-2 sentence response
 
 Return ONLY valid JSON:

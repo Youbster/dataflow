@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RefreshCw, Send, Sparkles, Gift, ListMusic, Flame, ArrowRight, Loader2 } from "lucide-react";
+import { RefreshCw, Send, Sparkles, Gift, ListMusic, Flame, ArrowRight, Loader2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -126,8 +126,11 @@ export default function DashboardPage() {
     }
   }
 
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const [greeting, setGreeting] = useState("Good morning");
+  useEffect(() => {
+    const hour = new Date().getHours();
+    setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+  }, []);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
@@ -194,18 +197,25 @@ export default function DashboardPage() {
               <>
                 <p className="text-sm text-muted-foreground leading-relaxed">{promptResult.message}</p>
                 {promptResult.tracks && promptResult.tracks.length > 0 && (
-                  <div className="space-y-3 pt-1 border-t border-border">
+                  <div className="space-y-2 pt-1 border-t border-border">
                     {promptResult.tracks.map((t, i) => (
-                      <div key={i} className="flex items-start gap-3">
+                      <a
+                        key={i}
+                        href={`https://open.spotify.com/search/${encodeURIComponent(`${t.trackName} ${t.artistName}`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-start gap-3 rounded-xl bg-accent/40 hover:bg-accent border border-transparent hover:border-border p-3 transition-all group"
+                      >
                         <span className="text-primary font-bold text-sm w-5 shrink-0 mt-0.5">{i + 1}</span>
-                        <div className="min-w-0">
-                          <p className="font-medium text-sm">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-sm group-hover:text-primary transition-colors">
                             {t.trackName}{" "}
                             <span className="text-muted-foreground font-normal">by {t.artistName}</span>
                           </p>
                           <p className="text-xs text-muted-foreground mt-0.5">{t.reason}</p>
                         </div>
-                      </div>
+                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-primary shrink-0 mt-0.5 transition-colors" />
+                      </a>
                     ))}
                   </div>
                 )}

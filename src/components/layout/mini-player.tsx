@@ -26,15 +26,21 @@ export function MiniPlayer() {
   const fetchState = useCallback(async () => {
     try {
       const res = await fetch("/api/spotify/player");
-      if (!res.ok) return;
-      const data: PlaybackState | null = await res.json();
-      setState(data);
-      if (data?.progress_ms !== undefined) {
-        progressRef.current = data.progress_ms;
-        setLocalProgress(data.progress_ms);
+      const data = await res.json();
+      if (!res.ok) {
+        console.warn("[MiniPlayer] API error:", res.status, data);
+        return;
       }
-      playingRef.current = data?.is_playing ?? false;
-    } catch { /* silent */ }
+      console.log("[MiniPlayer] state:", data?.item?.name ?? "nothing playing");
+      setState(data as PlaybackState | null);
+      if ((data as PlaybackState)?.progress_ms !== undefined) {
+        progressRef.current = (data as PlaybackState).progress_ms;
+        setLocalProgress((data as PlaybackState).progress_ms);
+      }
+      playingRef.current = (data as PlaybackState)?.is_playing ?? false;
+    } catch (err) {
+      console.warn("[MiniPlayer] fetch error:", err);
+    }
   }, []);
 
   // Poll every 8 seconds

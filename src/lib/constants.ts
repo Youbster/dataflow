@@ -8,6 +8,9 @@ export const SPOTIFY_SCOPES = [
   "playlist-read-collaborative",
   "playlist-modify-public",
   "playlist-modify-private",
+  "user-read-playback-state",
+  "user-modify-playback-state",
+  "user-read-currently-playing",
 ].join(" ");
 
 export const SPOTIFY_API_BASE = "https://api.spotify.com/v1";

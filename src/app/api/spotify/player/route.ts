@@ -19,10 +19,15 @@ export async function GET() {
   try {
     const token = await getValidSpotifyToken(user.id);
     const res = await spotifyFetch(BASE, token);
-    if (res.status === 204) return NextResponse.json(null); // nothing playing
-    if (!res.ok) return NextResponse.json(null);
+    if (res.status === 204) return NextResponse.json(null);
+    if (!res.ok) {
+      const body = await res.text();
+      console.error("[player GET]", res.status, body);
+      return NextResponse.json({ error: res.status, detail: body }, { status: res.status });
+    }
     return NextResponse.json(await res.json());
-  } catch {
+  } catch (err) {
+    console.error("[player GET] exception:", err);
     return NextResponse.json(null);
   }
 }
