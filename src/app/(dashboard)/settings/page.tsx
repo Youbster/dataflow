@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Save, LogOut } from "lucide-react";
+import { Save, LogOut, RefreshCw } from "lucide-react";
+import { SPOTIFY_SCOPES } from "@/lib/constants";
 import { toast } from "sonner";
 import type { UserProfile } from "@/types/database";
 
@@ -83,6 +84,21 @@ export default function SettingsPage() {
     router.push("/login");
   }
 
+  async function handleReconnectSpotify() {
+    const supabase = createClient();
+    await supabase.auth.signInWithOAuth({
+      provider: "spotify",
+      options: {
+        scopes: SPOTIFY_SCOPES,
+        redirectTo: `${window.location.origin}/api/auth/callback`,
+        queryParams: {
+          // Force Spotify to show the permissions dialog so new scopes are granted
+          show_dialog: "true",
+        },
+      },
+    });
+  }
+
   if (loading) {
     return (
       <div className="space-y-4 max-w-2xl">
@@ -153,7 +169,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Connected Account</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Spotify</p>
@@ -164,6 +180,15 @@ export default function SettingsPage() {
             <span className="text-xs px-2 py-1 rounded bg-[#1DB954]/10 text-[#1DB954] font-medium">
               {profile?.spotify_product || "Connected"}
             </span>
+          </div>
+          <div className="border-t border-border pt-4">
+            <p className="text-xs text-muted-foreground mb-3">
+              If playback control isn&apos;t working, reconnect to grant the latest permissions.
+            </p>
+            <Button variant="outline" size="sm" onClick={handleReconnectSpotify}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              Reconnect Spotify
+            </Button>
           </div>
         </CardContent>
       </Card>
