@@ -98,6 +98,11 @@ export default function DashboardPage() {
   const [selectedMood, setSelectedMood]   = useState<string | null>(null);
   const [intensity, setIntensity]         = useState<"low" | "medium" | "high">("medium");
   const [sessionMins, setSessionMins]     = useState<20 | 60 | 120>(60);
+  const [activity, setActivity]           = useState<string | null>(null);
+  const [startingPoint, setStartingPoint] = useState<"low" | "neutral" | "flow">("neutral");
+  const [familiarity, setFamiliarity]     = useState<"familiar" | "mix" | "fresh">("mix");
+  const [vocalPref, setVocalPref]         = useState<"any" | "instrumental">("any");
+  const [language, setLanguage]           = useState<"any" | "english" | "other">("any");
   const [moodPlaylist, setMoodPlaylist]   = useState<MoodPlaylist | null>(null);
   const [feedbackMode, setFeedbackMode]   = useState(false);
 
@@ -164,7 +169,16 @@ export default function DashboardPage() {
       const res = await fetch("/api/ai/mood-playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood: selectedMood, intensity, sessionMinutes: sessionMins }),
+        body: JSON.stringify({
+          mood: selectedMood,
+          intensity,
+          sessionMinutes: sessionMins,
+          activity,
+          startingPoint,
+          familiarity,
+          vocalPref,
+          language,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -183,6 +197,11 @@ export default function DashboardPage() {
     setFeedbackMode(false);
     setIntensity("medium");
     setSessionMins(60);
+    setActivity(null);
+    setStartingPoint("neutral");
+    setFamiliarity("mix");
+    setVocalPref("any");
+    setLanguage("any");
   }
 
   const activeMood = MOODS.find(m => m.id === selectedMood);
@@ -242,7 +261,8 @@ export default function DashboardPage() {
 
         {/* CONFIGURE */}
         {moodPhase === "configure" && activeMood && (
-          <div className="p-6 space-y-6">
+          <div className="p-6 space-y-5">
+            {/* Back + mood label */}
             <div className="flex items-center gap-3">
               <button onClick={resetMood} className="text-muted-foreground hover:text-foreground transition-colors p-1">
                 <ArrowLeft className="w-4 h-4" />
@@ -253,41 +273,117 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            {/* Intensity */}
             <div className="space-y-2">
-              <p className="text-sm font-medium text-muted-foreground">How intense?</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">How intense?</p>
               <div className="flex gap-2">
                 {(["low", "medium", "high"] as const).map((lvl) => (
-                  <button
-                    key={lvl}
-                    onClick={() => setIntensity(lvl)}
-                    className={`flex-1 py-2.5 rounded-xl text-sm font-medium border transition-all capitalize ${
-                      intensity === lvl
-                        ? "border-primary bg-primary/20 text-primary"
-                        : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
-                    }`}
-                  >
+                  <button key={lvl} onClick={() => setIntensity(lvl)}
+                    className={`flex-1 py-2 rounded-xl text-sm font-medium border transition-all ${intensity === lvl ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
                     {lvl === "low" ? "🌱 Low" : lvl === "medium" ? "⚡ Medium" : "🔥 High"}
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Session length */}
             <div className="space-y-2">
-              <p className="text-sm font-medium text-muted-foreground">How long?</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">How long?</p>
               <div className="flex gap-2">
                 {([20, 60, 120] as const).map((mins) => (
-                  <button
-                    key={mins}
-                    onClick={() => setSessionMins(mins)}
-                    className={`flex-1 py-2.5 rounded-xl text-sm font-medium border transition-all ${
-                      sessionMins === mins
-                        ? "border-primary bg-primary/20 text-primary"
-                        : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
-                    }`}
-                  >
-                    {mins === 20 ? "20 min" : mins === 60 ? "1 hour" : "2 hour+"}
+                  <button key={mins} onClick={() => setSessionMins(mins)}
+                    className={`flex-1 py-2 rounded-xl text-sm font-medium border transition-all ${sessionMins === mins ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                    {mins === 20 ? "20 min" : mins === 60 ? "1 hour" : "2 hr+"}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Activity */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">What are you doing? <span className="text-muted-foreground/40 normal-case font-normal">optional</span></p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "study",      emoji: "📚", label: "Study" },
+                  { id: "commute",    emoji: "🚗", label: "Commute" },
+                  { id: "gym",        emoji: "💪", label: "Gym" },
+                  { id: "cooking",    emoji: "🍳", label: "Cooking" },
+                  { id: "chilling",   emoji: "🛋️", label: "Chilling" },
+                  { id: "going_out",  emoji: "🎉", label: "Going out" },
+                ].map((a) => (
+                  <button key={a.id}
+                    onClick={() => setActivity(activity === a.id ? null : a.id)}
+                    className={`py-2 rounded-xl text-sm font-medium border transition-all ${activity === a.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                    {a.emoji} {a.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Starting point */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Where are you starting from?</p>
+              <div className="flex gap-2">
+                {([
+                  { id: "low",     label: "😔 Not feeling it" },
+                  { id: "neutral", label: "😐 Ready to go" },
+                  { id: "flow",    label: "⚡ In the flow" },
+                ] as const).map((s) => (
+                  <button key={s.id} onClick={() => setStartingPoint(s.id)}
+                    className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${startingPoint === s.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Familiarity */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Familiar or fresh?</p>
+              <div className="flex gap-2">
+                {([
+                  { id: "familiar", label: "🎵 Songs I know" },
+                  { id: "mix",      label: "🎲 Mix it up" },
+                  { id: "fresh",    label: "🌟 All new" },
+                ] as const).map((f) => (
+                  <button key={f.id} onClick={() => setFamiliarity(f.id)}
+                    className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${familiarity === f.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Vocals + Language row */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Vocals?</p>
+                <div className="flex gap-2">
+                  {([
+                    { id: "any",          label: "🎤 Any" },
+                    { id: "instrumental", label: "🎹 No lyrics" },
+                  ] as const).map((v) => (
+                    <button key={v.id} onClick={() => setVocalPref(v.id)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${vocalPref === v.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Language?</p>
+                <div className="flex gap-2">
+                  {([
+                    { id: "any",     label: "🌍 Any" },
+                    { id: "english", label: "🇬🇧 English" },
+                    { id: "other",   label: "🌐 Other" },
+                  ] as const).map((l) => (
+                    <button key={l.id} onClick={() => setLanguage(l.id)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-medium border transition-all ${language === l.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

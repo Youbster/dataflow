@@ -72,6 +72,42 @@ const MOOD_CONFIG: Record<string, MoodConfig> = {
   },
 };
 
+const ACTIVITY_NOTES: Record<string, string> = {
+  study:
+    "Activity: Working/studying. Cognitive load is HIGH. Prioritise non-distracting music. Lyrics compete with thinking — go instrumental or minimal vocals. Consistent tempo, no jarring transitions, no sudden loud moments.",
+  commute:
+    "Activity: Commuting. Mix of energy levels works well. Good for lyrics and dynamic tracks. Music should match the sense of movement.",
+  gym:
+    "Activity: Gym/working out. Physical performance is the goal. High BPM, motivational lyrics, powerful drops. Energy must be sustained — never let it dip.",
+  cooking:
+    "Activity: Cooking at home. Relaxed but engaged. Comfortable tempos, can be upbeat but don't overwhelm. Good mood for storytelling lyrics.",
+  chilling:
+    "Activity: Chilling at home. No pressure, music can breathe. Good for emotional depth and slower tempos. Let the tracks land.",
+  going_out:
+    "Activity: Getting ready to go out / already out. Building social energy. Start where they are emotionally and arc toward vibrant, confident, dance-ready tracks.",
+};
+
+const FAMILIARITY_PCT: Record<string, number> = {
+  familiar: 85,
+  mix: -1, // -1 = use mood default
+  fresh: 12,
+};
+
+const STARTING_POINT_NOTES: Record<string, string> = {
+  low: "EMOTIONAL STARTING POINT — NOT FEELING IT YET: This user is not currently in the mood. ISO principle is critical here — the anchor section MUST start gentle and accessible, even if the overall mood is high-energy. The playlist must earn the energy gradually. Never assume the user is already there. Ease in.",
+  neutral:
+    "EMOTIONAL STARTING POINT — NEUTRAL/READY: User is open and ready. Normal arc applies — trust the mood and intensity settings.",
+  flow: "EMOTIONAL STARTING POINT — ALREADY IN THE FLOW: User is already fully in the mood. Skip the warm-up. Start the anchor section at the TARGET energy immediately. Don't waste tracks on build-up — they're already there.",
+};
+
+const LANGUAGE_NOTES: Record<string, string> = {
+  any: "No language restriction — recommend music from their taste regardless of language.",
+  english:
+    "Strongly prefer English-language tracks. Only include non-English music if it is clearly part of their established listening history.",
+  other:
+    "Actively include non-English music from their taste profile. If they listen to Arabic, French, Spanish, or any other language artists, feature them. Don't default to English-only.",
+};
+
 function getTimeContext() {
   const now = new Date();
   const hour = now.getHours();
@@ -97,6 +133,20 @@ function trackCount(sessionMinutes: number) {
   return { total: 14, anchor: 3, groove: 7, discovery: 4 };
 }
 
+function detectNonEnglishLanguages(genres: string[]): string[] {
+  const joined = genres.join(" ").toLowerCase();
+  const detected: string[] = [];
+  if (/arabic|khaleeji|rai|mahraganat|sha.?bi/.test(joined)) detected.push("Arabic");
+  if (/french|chanson|vari/.test(joined)) detected.push("French");
+  if (/latin|reggaeton|bachata|flamenco|salsa|cumbia|corrido/.test(joined)) detected.push("Spanish/Latin");
+  if (/k-pop|korean|k-indie/.test(joined)) detected.push("Korean");
+  if (/afrobeats|afropop|afro|naija|highlife/.test(joined)) detected.push("Afrobeats");
+  if (/bollywood|hindi|desi|filmi/.test(joined)) detected.push("Hindi");
+  if (/turkish|arabesk/.test(joined)) detected.push("Turkish");
+  if (/portuguese|mpb|brazilian|samba|bossa/.test(joined)) detected.push("Portuguese/Brazilian");
+  return detected;
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -106,10 +156,22 @@ export async function POST(request: NextRequest) {
   const mood: string = body.mood ?? "surprise";
   const intensity: string = body.intensity ?? "medium";
   const sessionMinutes: number = body.sessionMinutes ?? 60;
+  // New params
+  const activity: string | null = body.activity ?? null;
+  const startingPoint: "low" | "neutral" | "flow" = body.startingPoint ?? "neutral";
+  const familiarity: "familiar" | "mix" | "fresh" = body.familiarity ?? "mix";
+  const vocalPref: "any" | "instrumental" = body.vocalPref ?? "any";
+  const language: "any" | "english" | "other" = body.language ?? "any";
 
   const config = MOOD_CONFIG[mood] ?? MOOD_CONFIG.surprise;
   const timeCtx = getTimeContext();
   const counts = trackCount(sessionMinutes);
+
+  // Resolve familiarity %
+  const familiarityPct =
+    FAMILIARITY_PCT[familiarity] === -1
+      ? config.familiarityPct
+      : FAMILIARITY_PCT[familiarity];
 
   try {
     const admin = createAdminClient();
@@ -128,7 +190,7 @@ export async function POST(request: NextRequest) {
       admin.from("user_listening_history").select("track_name, artist_names").eq("user_id", user.id).gte("played_at", sevenDaysAgo),
     ]);
 
-    // Build overplayed blocklist — skip late-night plays (likely sleep/ambient)
+    // Build overplayed blocklist
     const playCounts3d: Record<string, { count: number; name: string; artist: string; lateNightOnly: boolean }> = {};
     for (const p of history3d ?? []) {
       const hour = new Date(p.played_at).getHours();
@@ -138,16 +200,13 @@ export async function POST(request: NextRequest) {
       if (!isLateNight) playCounts3d[key].lateNightOnly = false;
       playCounts3d[key].count++;
     }
-    // Only block tracks played frequently during conscious listening hours
     const blocklist = Object.values(playCounts3d)
       .filter(v => v.count >= 5 && !v.lateNightOnly)
       .map(v => `"${v.name}" by ${v.artist}`)
       .join(", ");
 
-    // Songs played in the last 7 days (for deep cut detection)
     const recentSet = new Set((history7d ?? []).map(p => `${p.track_name}|||${p.artist_names?.[0]}`));
 
-    // Anchor candidates: top short-term tracks, not overplayed
     const anchorCandidates = (shortTracks ?? [])
       .filter(t => {
         const key = `${t.track_name}|||${t.artist_names?.[0]}`;
@@ -157,7 +216,6 @@ export async function POST(request: NextRequest) {
       .map(t => `"${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`)
       .join("; ");
 
-    // Deep cut candidates: long-term loved songs not played recently
     const deepCuts = (longTracks ?? [])
       .filter(t => !recentSet.has(`${t.track_name}|||${t.artist_names?.[0]}`))
       .slice(0, 15)
@@ -165,75 +223,94 @@ export async function POST(request: NextRequest) {
       .join("; ");
 
     const topArtists = (shortArtists ?? []).slice(0, 8).map(a => a.artist_name).join(", ");
-    const genres = [...new Set((shortArtists ?? []).flatMap(a => a.genres ?? []))].slice(0, 6).join(", ");
+    const allGenres = [...new Set((shortArtists ?? []).flatMap(a => a.genres ?? []))];
+    const genreStr = allGenres.slice(0, 6).join(", ");
 
-    // Intensity context
+    // Detect non-English languages in their taste for context
+    const nativeLanguages = detectNonEnglishLanguages(allGenres);
+
+    // Build context notes
     const intensityNote =
       intensity === "low"
-        ? `LOW intensity — user is at the gentle end of ${mood}. Start subtle, build slowly. Don't open at full power.`
+        ? `LOW intensity — start subtle, build slowly. Don't open at full power.`
         : intensity === "high"
-        ? `HIGH intensity — user is fully committed to ${mood}. No warm-up needed. Go hard from track 1.`
+        ? `HIGH intensity — go hard from track 1. No warm-up needed.`
         : `MEDIUM intensity — natural progression is good.`;
 
-    // Time/day context note
     let timeNote = "";
-    if (timeCtx.timeLabel === "late night") timeNote = "Late night session — even energetic moods should have depth and texture, not just raw aggression.";
+    if (timeCtx.timeLabel === "late night") timeNote = "Late night session — even energetic moods should have depth and texture.";
     else if (timeCtx.dayLabel.includes("Monday")) timeNote = "Monday — user is likely setting the tone for their week.";
-    else if (timeCtx.dayLabel.includes("Friday")) timeNote = "Friday — week is wrapping up. Even work playlists can have more joy and release.";
-    else if (timeCtx.isWeekend) timeNote = "Weekend — more emotional openness, less pressure. Playlists can breathe more.";
+    else if (timeCtx.dayLabel.includes("Friday")) timeNote = "Friday — week is wrapping up, more joy and release is welcome.";
+    else if (timeCtx.isWeekend) timeNote = "Weekend — more emotional openness, playlists can breathe.";
+
+    // Vocal note: user's explicit choice overrides mood default
+    const vocalNote =
+      vocalPref === "instrumental"
+        ? "INSTRUMENTAL STRONGLY PREFERRED — user explicitly chose no lyrics. Only include vocal tracks if they are iconic for this mood and vocals are extremely minimal/ambient. Prioritise instrumentals."
+        : config.vocalNote;
+
+    // Language note
+    const languageNote =
+      language === "other" && nativeLanguages.length > 0
+        ? `Actively include non-English music — detected languages in their taste: ${nativeLanguages.join(", ")}. Feature these artists.`
+        : LANGUAGE_NOTES[language];
 
     const prompt = `Generate a ${counts.total}-track ${mood.toUpperCase()} mood playlist.
 
 USER CONTEXT:
 - Time: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}
 - Mood: ${mood} | Intensity: ${intensity.toUpperCase()}
-- Session length: ~${sessionMinutes} min → ${counts.total} tracks
+- Session: ~${sessionMinutes} min → ${counts.total} tracks
 ${timeNote ? `- Time note: ${timeNote}` : ""}
 - ${intensityNote}
+${activity ? `\nACTIVITY: ${ACTIVITY_NOTES[activity] ?? ""}` : ""}
+
+EMOTIONAL STARTING POINT:
+${STARTING_POINT_NOTES[startingPoint]}
 
 THEIR TASTE PROFILE:
 - Current top artists: ${topArtists || "no data yet"}
-- Active genres: ${genres || "no data yet"}
+- Active genres: ${genreStr || "no data yet"}
 
 PLAYLIST STRUCTURE — follow this arc exactly:
 
 SECTION 1 — "Setting the tone" (${counts.anchor} tracks, type: "anchor")
-Open with songs they KNOW and have strong emotional attachment to. These build immediate trust.
-Choose from their known anchors: ${anchorCandidates || "use your best judgment from their artists/genres"}
+Open with songs they KNOW and have strong emotional attachment to. Immediate trust.
+${startingPoint === "flow" ? "Start at TARGET energy — they are already there." : startingPoint === "low" ? "Start GENTLE — they need to be eased in even if the mood is energetic." : ""}
+Choose from: ${anchorCandidates || "use your best judgment from their artists/genres"}
 
 SECTION 2 — "Finding your groove" (${counts.groove} tracks, type: "groove")
-Deep cuts from artists they love but haven't played recently, OR artists that sit directly adjacent to their taste.
-Songs they might recognize but haven't overplayed. The bridge between familiar and new.
+Deep cuts from artists they love but haven't played recently. The bridge.
 Long-term loved but recently unplayed: ${deepCuts || "use their long-term artists for deep cuts"}
 
 SECTION 3 — "This one's for you" (${counts.discovery} tracks, type: "discovery")
-Genuine discoveries — artists or songs they've likely never heard — but that perfectly match their taste signature and THIS mood.
-These are the "gift" tracks. They should feel like a natural extension of their sound, not a departure.
+Genuine discoveries — new to them but perfectly matching their taste + this mood.
+${familiarity === "familiar" ? "Keep discoveries minimal and very safe — user wants comfort, not surprises." : familiarity === "fresh" ? "Be bold with discoveries — user explicitly wants new music. Fewer familiar tracks, more genuine finds." : ""}
 
 HARD RULES:
-${blocklist ? `- NEVER include these overplayed songs (blocked): ${blocklist}` : "- Nothing flagged as overplayed"}
-- Vocal preference: ${config.vocalNote}
+${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : "- Nothing flagged as overplayed"}
+- Vocal preference: ${vocalNote}
 - Energy arc: ${config.energyArc}
 - BPM guidance: ${config.bpmHint}
 - Track duration: ${config.durationHint}
-- NO jarring energy jumps between consecutive tracks — each transition should feel intentional
-- Discovery tracks must be genre-adjacent to their taste — don't send them somewhere completely foreign
-- Familiarity ratio: ~${config.familiarityPct}% familiar / ${100 - config.familiarityPct}% new
+- NO jarring energy jumps between consecutive tracks
+- Familiarity ratio: ~${familiarityPct}% familiar / ${100 - familiarityPct}% new
+- Language: ${languageNote}
 
 ACCURACY REQUIREMENTS:
-- Only suggest real, existing songs on Spotify
-- Artist and track names must be spelled correctly
-- Reasons must be specific to THIS user's taste, NOT generic descriptions
+- Only real, existing songs on Spotify
+- Correct artist and track spelling
+- Reasons specific to THIS user's taste, NOT generic
 
 Return ONLY valid JSON:
 {
-  "intro": "2 sentences max — what this arc does and why it fits their mood + taste right now. Be specific and warm.",
+  "intro": "2 sentences — what this arc does and why it fits their mood, activity, and starting point. Be warm and specific.",
   "tracks": [
     {
       "trackName": "exact track name",
       "artistName": "exact artist name",
       "section": "anchor" | "groove" | "discovery",
-      "reason": "one specific sentence — why THIS track for THIS mood at THIS time for someone with their taste"
+      "reason": "one sentence — why THIS track for THIS context"
     }
   ]
 }`;
@@ -256,7 +333,7 @@ Return ONLY valid JSON:
       tracks: { trackName: string; artistName: string; section: string; reason: string }[];
     };
 
-    // Verify tracks on Spotify in parallel — artist-validated to avoid wrong matches
+    // Verify tracks on Spotify in parallel — artist-validated
     const spotify = createSpotifyClient(user.id);
     const verified = await Promise.allSettled(
       result.tracks.map(async (track) => {
