@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import type { UserProfile } from "@/types/database";
 
 export default function SettingsPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -24,9 +23,11 @@ export default function SettingsPage() {
   const [bio, setBio] = useState("");
   const [isPublic, setIsPublic] = useState(false);
 
-  // Show toast on reconnect result
+  // Show toast on reconnect result — read from window.location to avoid
+  // useSearchParams which requires Suspense in Next.js 16
   useEffect(() => {
-    const reconnect = searchParams.get("reconnect");
+    const params = new URLSearchParams(window.location.search);
+    const reconnect = params.get("reconnect");
     if (reconnect === "success") {
       toast.success("Spotify reconnected! Playlist saving should now work.");
       router.replace("/settings");
@@ -34,7 +35,7 @@ export default function SettingsPage() {
       toast.error("Reconnect failed. Try again or check your Spotify app settings.");
       router.replace("/settings");
     }
-  }, [searchParams, router]);
+  }, [router]);
 
   useEffect(() => {
     async function load() {
