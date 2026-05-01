@@ -17,7 +17,7 @@ export function MobileNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-white/[0.06] bg-[rgba(9,10,20,0.97)] backdrop-blur-2xl safe-area-inset-bottom">
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-white/[0.06] bg-black safe-area-inset-bottom">
       <div className="flex items-center justify-around h-14 px-1">
         {tabs.map((tab) => {
           const isActive = pathname.startsWith(tab.href);
@@ -31,12 +31,12 @@ export function MobileNav() {
               )}
             >
               <tab.icon
-                className={cn("w-5 h-5 shrink-0 transition-all", isActive ? "text-primary" : "opacity-50")}
+                className={cn("w-5 h-5 shrink-0 transition-all", isActive ? "text-primary" : "text-[#B3B3B3]")}
                 strokeWidth={isActive ? 2.2 : 1.75}
               />
               <span className={cn(
                 "text-[10px] font-medium leading-none",
-                isActive ? "text-primary" : "text-muted-foreground/60"
+                isActive ? "text-primary" : "text-[#6a6a6a]"
               )}>
                 {tab.label}
               </span>
