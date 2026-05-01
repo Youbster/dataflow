@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { calculateStalenessScores } from "@/lib/staleness/calculator";
 import { suggestFreshAlternatives } from "@/lib/claude/staleness-analyzer";
 
-export async function GET(request: Request) {
+export async function GET() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -14,8 +14,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const scores = await calculateStalenessScores(user.id);
-    return NextResponse.json({ scores });
+    const { results, health } = await calculateStalenessScores(user.id);
+    return NextResponse.json({ scores: results, health });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Staleness calculation failed";
