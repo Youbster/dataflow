@@ -15,6 +15,10 @@ async function spotifyFetch(url: string, token: string, options: RequestInit = {
   });
   if (!res.ok) {
     const error = await res.text();
+    if (res.status === 403) {
+      // Almost always means the token lacks playlist scopes — user must reconnect
+      throw new Error("SCOPE_MISSING");
+    }
     throw new Error(`Spotify API error ${res.status}: ${error}`);
   }
   return res.status === 204 ? null : res.json();
@@ -75,8 +79,13 @@ export async function POST(request: Request) {
       url: playlist.external_urls.spotify,
     });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Failed to create playlist";
+    const message = err instanceof Error ? err.message : "Failed to create playlist";
+    if (message === "SCOPE_MISSING") {
+      return NextResponse.json(
+        { error: "Spotify playlist access not granted. Reconnect your Spotify account in Settings to fix this.", code: "scope_missing" },
+        { status: 403 }
+      );
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

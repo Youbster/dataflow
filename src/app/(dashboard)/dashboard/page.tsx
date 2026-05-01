@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -84,6 +85,7 @@ export default function DashboardPage() {
   const [isSaving, setIsSaving]         = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const router = useRouter();
 
   useEffect(() => { syncThenLoad(); }, []);
 
@@ -163,7 +165,18 @@ export default function DashboardPage() {
         body: JSON.stringify({ playlistId: playlist.playlistId ?? null, name: `${label} — ${dateLabel}`, description: playlist.intro, trackUris: playableUris }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save");
+      if (!res.ok) {
+        if (data.code === "scope_missing") {
+          toast.error("Spotify playlist access not granted", {
+            description: "Reconnect your Spotify account in Settings to fix this.",
+            action: { label: "Settings", onClick: () => router.push("/settings") },
+            duration: 8000,
+          });
+        } else {
+          throw new Error(data.error || "Failed to save");
+        }
+        return;
+      }
       setSavedToSpotify(true);
       toast.success("Playlist saved to Spotify!");
     } catch (err) {
