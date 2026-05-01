@@ -14,10 +14,27 @@ export async function GET() {
     const res = await fetch("https://api.spotify.com/v1/me/player/devices", {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return NextResponse.json({ devices: [] });
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error("[devices] Spotify error", res.status, body);
+      // Expose the status so the client can show a useful message
+      return NextResponse.json(
+        { devices: [], error: res.status, detail: body },
+        { status: 200 } // keep 200 so the client handles it gracefully
+      );
+    }
+
+    // 204 = no active devices
+    if (res.status === 204) {
+      return NextResponse.json({ devices: [] });
+    }
+
     const data = await res.json();
+    console.log("[devices]", data.devices?.length ?? 0, "device(s) found");
     return NextResponse.json({ devices: data.devices ?? [] });
-  } catch {
+  } catch (err) {
+    console.error("[devices] exception:", err);
     return NextResponse.json({ devices: [] });
   }
 }

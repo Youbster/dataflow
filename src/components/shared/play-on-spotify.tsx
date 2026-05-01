@@ -53,11 +53,10 @@ export function PlayOnSpotify({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [status]);
 
-  async function fetchDevices(): Promise<SpotifyDevice[]> {
+  async function fetchDevices(): Promise<{ devices: SpotifyDevice[]; error?: number }> {
     const res = await fetch("/api/spotify/devices");
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.devices ?? [];
+    const data = await res.json().catch(() => ({ devices: [] }));
+    return data;
   }
 
   async function play(deviceId?: string) {
@@ -87,12 +86,20 @@ export function PlayOnSpotify({
     if (status !== "idle" || uris.length === 0) return;
     setStatus("loading");
 
-    const devs = await fetchDevices();
+    const result = await fetchDevices();
+    const devs = result.devices;
     setDevices(devs);
 
+    // Scope / auth error
+    if (result.error === 401 || result.error === 403) {
+      toast.error("Re-connect your Spotify account in Settings to enable playback");
+      setStatus("idle");
+      return;
+    }
+
     if (devs.length === 0) {
-      toast.info("Open Spotify on any device first, then try again", {
-        description: "Phone, computer, or smart speaker all work.",
+      toast.info("No Spotify devices found", {
+        description: "Play any song in Spotify first to activate your device, then try again.",
       });
       setStatus("idle");
       return;
@@ -101,13 +108,10 @@ export function PlayOnSpotify({
     const active = devs.find((d) => d.is_active);
 
     if (active) {
-      // Active device found — play immediately, no picker needed
       await play(active.id);
     } else if (devs.length === 1) {
-      // Only one device — just use it
       await play(devs[0].id);
     } else {
-      // Multiple inactive devices — let user pick
       setStatus("picking");
     }
   }
