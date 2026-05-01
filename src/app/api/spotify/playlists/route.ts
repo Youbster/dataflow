@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getValidSpotifyToken } from "@/lib/spotify/token";
 import { SPOTIFY_API_BASE } from "@/lib/constants";
 
 async function spotifyFetch(url: string, token: string, options: RequestInit = {}) {
@@ -29,15 +30,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const token = session.provider_token;
-  if (!token) {
-    return NextResponse.json(
-      { error: "No Spotify token in session — please log out and log back in" },
-      { status: 401 }
-    );
-  }
-
   try {
+    const token = await getValidSpotifyToken(session.user.id);
     const { playlistId, name, description, trackUris } = await request.json();
 
     const admin = createAdminClient();
