@@ -2,6 +2,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { MiniPlayer } from "@/components/layout/mini-player";
 import { MobileNav } from "@/components/layout/mobile-nav";
+import { SplashScreen } from "@/components/shared/splash-screen";
 
 export default function DashboardLayout({
   children,
@@ -10,6 +11,7 @@ export default function DashboardLayout({
 }) {
   return (
     <div className="min-h-screen">
+      <SplashScreen />
       <Sidebar />
       <div className="md:ml-60 flex flex-col min-h-screen">
         <Topbar />
