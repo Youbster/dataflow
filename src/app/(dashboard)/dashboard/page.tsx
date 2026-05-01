@@ -98,7 +98,7 @@ export default function DashboardPage() {
   const [selectedMood, setSelectedMood]   = useState<string | null>(null);
   const [intensity, setIntensity]         = useState<"low" | "medium" | "high">("medium");
   const [sessionMins, setSessionMins]     = useState<20 | 60 | 120>(60);
-  const [activity, setActivity]           = useState<string | null>(null);
+  const [environment, setEnvironment]     = useState<string | null>(null);
   const [startingPoint, setStartingPoint] = useState<"low" | "neutral" | "flow">("neutral");
   const [familiarity, setFamiliarity]     = useState<"familiar" | "mix" | "fresh">("mix");
   const [vocalPref, setVocalPref]         = useState<"any" | "instrumental">("any");
@@ -173,7 +173,7 @@ export default function DashboardPage() {
           mood: selectedMood,
           intensity,
           sessionMinutes: sessionMins,
-          activity,
+          environment,
           startingPoint,
           familiarity,
           vocalPref,
@@ -197,7 +197,7 @@ export default function DashboardPage() {
     setFeedbackMode(false);
     setIntensity("medium");
     setSessionMins(60);
-    setActivity(null);
+    setEnvironment(null);
     setStartingPoint("neutral");
     setFamiliarity("mix");
     setVocalPref("any");
@@ -299,22 +299,20 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Activity */}
+            {/* Environment */}
             <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">What are you doing? <span className="text-muted-foreground/40 normal-case font-normal">optional</span></p>
-              <div className="grid grid-cols-3 gap-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Where are you listening? <span className="text-muted-foreground/40 normal-case font-normal">optional</span></p>
+              <div className="grid grid-cols-4 gap-2">
                 {[
-                  { id: "study",      emoji: "📚", label: "Study" },
-                  { id: "commute",    emoji: "🚗", label: "Commute" },
-                  { id: "gym",        emoji: "💪", label: "Gym" },
-                  { id: "cooking",    emoji: "🍳", label: "Cooking" },
-                  { id: "chilling",   emoji: "🛋️", label: "Chilling" },
-                  { id: "going_out",  emoji: "🎉", label: "Going out" },
-                ].map((a) => (
-                  <button key={a.id}
-                    onClick={() => setActivity(activity === a.id ? null : a.id)}
-                    className={`py-2 rounded-xl text-sm font-medium border transition-all ${activity === a.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
-                    {a.emoji} {a.label}
+                  { id: "headphones", emoji: "🎧", label: "Headphones" },
+                  { id: "speaker",    emoji: "🔊", label: "Speaker" },
+                  { id: "car",        emoji: "🚗", label: "Car" },
+                  { id: "outside",    emoji: "🌳", label: "Outside" },
+                ].map((e) => (
+                  <button key={e.id}
+                    onClick={() => setEnvironment(environment === e.id ? null : e.id)}
+                    className={`py-2 rounded-xl text-xs font-medium border transition-all ${environment === e.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-accent/40 text-muted-foreground hover:text-foreground"}`}>
+                    {e.emoji}<br />{e.label}
                   </button>
                 ))}
               </div>

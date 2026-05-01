@@ -72,25 +72,21 @@ const MOOD_CONFIG: Record<string, MoodConfig> = {
   },
 };
 
-const ACTIVITY_NOTES: Record<string, string> = {
-  study:
-    "Activity: Working/studying. Cognitive load is HIGH. Prioritise non-distracting music. Lyrics compete with thinking — go instrumental or minimal vocals. Consistent tempo, no jarring transitions, no sudden loud moments.",
-  commute:
-    "Activity: Commuting. Mix of energy levels works well. Good for lyrics and dynamic tracks. Music should match the sense of movement.",
-  gym:
-    "Activity: Gym/working out. Physical performance is the goal. High BPM, motivational lyrics, powerful drops. Energy must be sustained — never let it dip.",
-  cooking:
-    "Activity: Cooking at home. Relaxed but engaged. Comfortable tempos, can be upbeat but don't overwhelm. Good mood for storytelling lyrics.",
-  chilling:
-    "Activity: Chilling at home. No pressure, music can breathe. Good for emotional depth and slower tempos. Let the tracks land.",
-  going_out:
-    "Activity: Getting ready to go out / already out. Building social energy. Start where they are emotionally and arc toward vibrant, confident, dance-ready tracks.",
+const ENVIRONMENT_NOTES: Record<string, string> = {
+  headphones:
+    "Environment: Headphones. Intimate, detailed listening. Complex arrangements, subtle dynamics, and quiet passages all land — the listener catches everything. Great for introspective or layered production.",
+  speaker:
+    "Environment: Home speaker. Open room listening. Music should feel comfortable at volume. Can handle more dynamic range and variety.",
+  car:
+    "Environment: Car stereo. Bass and rhythm translate best. Tracks with strong pulse and clear melody win. Great for lyrics to sing along to. Avoid very quiet or delicate tracks.",
+  outside:
+    "Environment: Outside / open air. Music competes with ambient noise. Choose tracks with strong energy, clear melody, or distinctive rhythm. Avoid very quiet or heavily nuanced production — it won't land.",
 };
 
 const FAMILIARITY_PCT: Record<string, number> = {
   familiar: 85,
   mix: -1, // -1 = use mood default
-  fresh: 12,
+  fresh: 0, // fully suppressed — handled structurally in the prompt
 };
 
 const STARTING_POINT_NOTES: Record<string, string> = {
@@ -157,7 +153,7 @@ export async function POST(request: NextRequest) {
   const intensity: string = body.intensity ?? "medium";
   const sessionMinutes: number = body.sessionMinutes ?? 60;
   // New params
-  const activity: string | null = body.activity ?? null;
+  const environment: string | null = body.environment ?? null;
   const startingPoint: "low" | "neutral" | "flow" = body.startingPoint ?? "neutral";
   const familiarity: "familiar" | "mix" | "fresh" = body.familiarity ?? "mix";
   const vocalPref: "any" | "instrumental" = body.vocalPref ?? "any";
@@ -255,7 +251,10 @@ export async function POST(request: NextRequest) {
         ? `Actively include non-English music — detected languages in their taste: ${nativeLanguages.join(", ")}. Feature these artists.`
         : LANGUAGE_NOTES[language];
 
-    const prompt = `Generate a ${counts.total}-track ${mood.toUpperCase()} mood playlist.
+    const isFresh = familiarity === "fresh";
+
+    const prompt = isFresh
+      ? `Generate a ${counts.total}-track FULL DISCOVERY playlist for a ${mood.toUpperCase()} mood.
 
 USER CONTEXT:
 - Time: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}
@@ -263,7 +262,67 @@ USER CONTEXT:
 - Session: ~${sessionMinutes} min → ${counts.total} tracks
 ${timeNote ? `- Time note: ${timeNote}` : ""}
 - ${intensityNote}
-${activity ? `\nACTIVITY: ${ACTIVITY_NOTES[activity] ?? ""}` : ""}
+${environment ? `\nENVIRONMENT: ${ENVIRONMENT_NOTES[environment] ?? ""}` : ""}
+
+EMOTIONAL STARTING POINT:
+${STARTING_POINT_NOTES[startingPoint]}
+
+THEIR TASTE SIGNATURE (use ONLY as a map to find NEW territory — do NOT suggest these tracks):
+- Artists they already know: ${topArtists || "no data yet"}
+- Genres they like: ${genreStr || "no data yet"}
+- Language: ${languageNote}
+
+⚠️ FULL DISCOVERY MODE — CRITICAL RULES:
+- DO NOT suggest any track the user already knows or has played
+- DO NOT use any of these tracks: ${anchorCandidates || "none listed"} — these are already known to the user
+- DO NOT use any of these tracks: ${deepCuts || "none listed"} — these are already in their history
+- DO NOT suggest tracks by artists they already follow — find ADJACENT artists instead
+- Every single track must be a genuine discovery: a real song they have almost certainly never heard
+- Use their taste as a compass, not a destination — navigate to new territory that borders their world
+
+PLAYLIST STRUCTURE — all sections are discovery-mode:
+
+SECTION 1 — "Gateway" (${counts.anchor} tracks, type: "anchor")
+Artists/tracks that are the closest stylistic neighbours to what they know — the most accessible entry point to new music. Someone hearing these would immediately feel "this fits me" even though they've never heard it.
+
+SECTION 2 — "Deeper" (${counts.groove} tracks, type: "groove")
+More niche within their taste territory. Artists that are a little further from the mainstream of their listening. Still fits — but pushes them slightly.
+
+SECTION 3 — "Wildcard" (${counts.discovery} tracks, type: "discovery")
+True surprises — genre-adjacent but genuinely unexpected. Artists or tracks they'd never find on their own but would love.
+
+HARD RULES:
+${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : ""}
+- Vocal preference: ${vocalNote}
+- Energy arc: ${config.energyArc}
+- BPM guidance: ${config.bpmHint}
+- Track duration: ${config.durationHint}
+- NO jarring energy jumps
+- 0% familiar — every track must be genuinely new to them
+
+ACCURACY: Only real Spotify tracks. Correct spelling. Reasons explain why it fits their taste territory.
+
+Return ONLY valid JSON:
+{
+  "intro": "2 sentences — tell them this is a full discovery session and what sonic territory you're taking them into based on their taste.",
+  "tracks": [
+    {
+      "trackName": "exact track name",
+      "artistName": "exact artist name",
+      "section": "anchor" | "groove" | "discovery",
+      "reason": "one sentence — what connects this to their taste even though it's new"
+    }
+  ]
+}`
+      : `Generate a ${counts.total}-track ${mood.toUpperCase()} mood playlist.
+
+USER CONTEXT:
+- Time: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}
+- Mood: ${mood} | Intensity: ${intensity.toUpperCase()}
+- Session: ~${sessionMinutes} min → ${counts.total} tracks
+${timeNote ? `- Time note: ${timeNote}` : ""}
+- ${intensityNote}
+${environment ? `\nENVIRONMENT: ${ENVIRONMENT_NOTES[environment] ?? ""}` : ""}
 
 EMOTIONAL STARTING POINT:
 ${STARTING_POINT_NOTES[startingPoint]}
@@ -285,7 +344,7 @@ Long-term loved but recently unplayed: ${deepCuts || "use their long-term artist
 
 SECTION 3 — "This one's for you" (${counts.discovery} tracks, type: "discovery")
 Genuine discoveries — new to them but perfectly matching their taste + this mood.
-${familiarity === "familiar" ? "Keep discoveries minimal and very safe — user wants comfort, not surprises." : familiarity === "fresh" ? "Be bold with discoveries — user explicitly wants new music. Fewer familiar tracks, more genuine finds." : ""}
+${familiarity === "familiar" ? "Keep discoveries very safe and minimal — user wants comfort, not surprises. Stick almost entirely to known artists." : ""}
 
 HARD RULES:
 ${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : "- Nothing flagged as overplayed"}
@@ -297,20 +356,17 @@ ${blocklist ? `- NEVER include these overplayed songs: ${blocklist}` : "- Nothin
 - Familiarity ratio: ~${familiarityPct}% familiar / ${100 - familiarityPct}% new
 - Language: ${languageNote}
 
-ACCURACY REQUIREMENTS:
-- Only real, existing songs on Spotify
-- Correct artist and track spelling
-- Reasons specific to THIS user's taste, NOT generic
+ACCURACY: Only real Spotify tracks. Correct spelling. Reasons specific to THIS user's taste.
 
 Return ONLY valid JSON:
 {
-  "intro": "2 sentences — what this arc does and why it fits their mood, activity, and starting point. Be warm and specific.",
+  "intro": "2 sentences — what this arc does and why it fits their mood + context right now. Be warm and specific.",
   "tracks": [
     {
       "trackName": "exact track name",
       "artistName": "exact artist name",
       "section": "anchor" | "groove" | "discovery",
-      "reason": "one sentence — why THIS track for THIS context"
+      "reason": "one sentence — why THIS track for THIS mood at THIS time for someone with their taste"
     }
   ]
 }`;
