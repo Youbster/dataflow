@@ -93,11 +93,11 @@ export function MiniPlayer() {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 md:left-60 z-50 bg-card/95 backdrop-blur-md border-t border-border">
+    <div className="glass-miniplayer fixed bottom-0 left-0 right-0 md:left-60 z-50">
       {/* Progress bar */}
-      <div className="h-0.5 bg-border">
+      <div className="h-[2px] bg-white/[0.06]">
         <div
-          className="h-full bg-primary transition-none"
+          className="h-full bg-primary shadow-[0_0_8px_rgba(29,185,84,0.6)] transition-none"
           style={{ width: `${pct}%` }}
         />
       </div>
