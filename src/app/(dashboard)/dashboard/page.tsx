@@ -27,17 +27,69 @@ const GENRE_COLORS = [
   "bg-blue-500/15 text-blue-400 border-blue-500/25",
 ];
 
-// ─── Activity chips — 4 × 2 grid, all visible at once ────────────────────────
-const ACTIVITY_CHIPS = [
-  { emoji: "🏋️", label: "Workout",   prompt: "High energy workout, pump it up, no slow moments" },
-  { emoji: "📚", label: "Focus",     prompt: "Deep focus, minimal lyrics, flow state, keep me locked in" },
-  { emoji: "🚗", label: "Drive",     prompt: "Road trip vibes, windows down, open road feeling" },
-  { emoji: "🌙", label: "Wind down", prompt: "Calm and relaxing, winding down for the night" },
-  { emoji: "🎉", label: "Party",     prompt: "Party energy, crowd pleasers, danceable hits" },
-  { emoji: "☕", label: "Morning",   prompt: "Easy morning, wake up gently, positive start to the day" },
-  { emoji: "✈️", label: "Travel",    prompt: "Cinematic and wanderlust, perfect for being on the move" },
-  { emoji: "😤", label: "Vent",      prompt: "Cathartic and emotional, help me process big feelings" },
+// ─── Mood chips ───────────────────────────────────────────────────────────────
+const MOOD_CHIPS = [
+  { emoji: "⚡", label: "Energized" },
+  { emoji: "🎯", label: "Focused"   },
+  { emoji: "🌊", label: "Chill"     },
+  { emoji: "✨", label: "Happy"     },
+  { emoji: "🌧️", label: "Moody"     },
+  { emoji: "🔥", label: "Confident" },
+  { emoji: "💫", label: "Romantic"  },
+  { emoji: "🕰️", label: "Nostalgic" },
 ];
+
+// ─── Context chips — revealed progressively based on selected mood ────────────
+const CONTEXT_BY_MOOD: Record<string, { emoji: string; label: string; prompt: string }[]> = {
+  Energized: [
+    { emoji: "🏋️", label: "Workout",     prompt: "High energy workout, pump it up, no slow moments" },
+    { emoji: "🎉", label: "Party",       prompt: "Party energy, crowd pleasers, bangers only" },
+    { emoji: "🚗", label: "Drive",       prompt: "Fast lane, windows down, open road feeling" },
+    { emoji: "☕", label: "Morning",     prompt: "Morning boost, ease in then build energy" },
+  ],
+  Focused: [
+    { emoji: "💻", label: "Deep work",   prompt: "Deep focus, no distractions, flow state" },
+    { emoji: "📚", label: "Study",       prompt: "Studying, concentration, minimal lyrics" },
+    { emoji: "📖", label: "Reading",     prompt: "Reading ambiance, calm and unobtrusive" },
+    { emoji: "⌨️", label: "Coding",      prompt: "Coding session, rhythmic and focused, minimal lyrics" },
+  ],
+  Chill: [
+    { emoji: "🌙", label: "Wind down",   prompt: "Winding down for the night, calm and relaxing" },
+    { emoji: "🍳", label: "Cooking",     prompt: "Cooking at home, laid-back and easy" },
+    { emoji: "🌃", label: "Night walk",  prompt: "Late night walk, atmospheric and introspective" },
+    { emoji: "✈️", label: "Travel",      prompt: "Travelling, cinematic and wanderlust" },
+  ],
+  Happy: [
+    { emoji: "💃", label: "Dance",       prompt: "Feel-good danceable tracks, pure joy" },
+    { emoji: "🥂", label: "Brunch",      prompt: "Relaxed brunch vibes, good mood all the way" },
+    { emoji: "🗺️", label: "Road trip",   prompt: "Road trip with friends, sing-along energy" },
+    { emoji: "👥", label: "Friends",     prompt: "Hanging with friends, fun crowd-pleasing music" },
+  ],
+  Moody: [
+    { emoji: "🌑", label: "Late night",  prompt: "Late night introspective, deep and atmospheric" },
+    { emoji: "🌧️", label: "Rain",        prompt: "Rainy day vibes, melancholic and beautiful" },
+    { emoji: "🪞", label: "Solo",        prompt: "Alone with my thoughts, emotional and raw" },
+    { emoji: "✍️", label: "Journaling",  prompt: "Journaling session, reflective and quiet" },
+  ],
+  Confident: [
+    { emoji: "💪", label: "Workout",     prompt: "Power workout, aggressive energy, no mercy" },
+    { emoji: "👗", label: "Getting ready", prompt: "Getting ready to go out, hype and confident" },
+    { emoji: "🌆", label: "Night out",   prompt: "Night out, swagger and confidence" },
+    { emoji: "⚡", label: "Hustle",      prompt: "Hustle mode, driven and unstoppable" },
+  ],
+  Romantic: [
+    { emoji: "🕯️", label: "Date night",  prompt: "Romantic date night, soft and intimate" },
+    { emoji: "🌅", label: "Long drive",  prompt: "Long scenic drive, romantic and cinematic" },
+    { emoji: "🫕", label: "Cooking together", prompt: "Cooking together, warm and loving" },
+    { emoji: "🌙", label: "Night in",   prompt: "Cozy night in together, tender and close" },
+  ],
+  Nostalgic: [
+    { emoji: "📼", label: "Throwback",   prompt: "Throwback hits, pure nostalgia" },
+    { emoji: "☔", label: "Rainy day",   prompt: "Nostalgic rainy day, memories and feelings" },
+    { emoji: "🚙", label: "Long drive",  prompt: "Long drive down memory lane" },
+    { emoji: "🕯️", label: "Wind down",  prompt: "Nostalgic wind-down, soft and reflective" },
+  ],
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Phase = "pick" | "loading" | "result";
@@ -102,6 +154,23 @@ function Pill({
   );
 }
 
+// ─── MoodChip ────────────────────────────────────────────────────────────────
+function MoodChip({ emoji, label, active, onClick }: { emoji: string; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
+        active
+          ? "border-primary bg-primary/15 text-primary"
+          : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
+      }`}
+    >
+      <span className="text-base leading-none">{emoji}</span>
+      <span className="text-[10px]">{label}</span>
+    </button>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const [homeData, setHomeData]       = useState<HomeData | null>(null);
@@ -111,6 +180,8 @@ export default function DashboardPage() {
   // generator — core
   const [phase, setPhase]             = useState<Phase>("pick");
   const [promptText, setPromptText]   = useState("");
+  const [selectedMood, setSelectedMood]       = useState<string | null>(null);
+  const [selectedContext, setSelectedContext] = useState<string | null>(null);
   const [seedTrack, setSeedTrack]     = useState<RecentTrack | null>(null);
   const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
@@ -123,7 +194,7 @@ export default function DashboardPage() {
   const [sessionMins, setSessionMins] = useState<20 | 60 | 120>(60);
   const [vibe, setVibe]               = useState<Vibe>("mixed");
 
-  // generator — advanced (hidden behind "More options")
+  // generator — advanced
   const [showMore, setShowMore]       = useState(false);
   const [vocals, setVocals]           = useState<"any" | "lyrics" | "instrumental">("any");
   const [language, setLanguage]       = useState<"any" | "english" | "match">("any");
@@ -161,31 +232,35 @@ export default function DashboardPage() {
     finally { setSyncing(false); }
   }
 
-  // Smart suggestions — only data-driven, no generic time-of-day filler
+  // Smart suggestions — data-driven only, max 2
   const smartSuggestions = useMemo(() => {
     if (!homeData) return [];
-    const suggestions: string[] = [];
-
-    if (homeData.topArtist && homeData.topGenres?.[0]) {
-      suggestions.push(`More ${homeData.topGenres[0]} like ${homeData.topArtist}`);
-    } else if (homeData.topArtist) {
-      suggestions.push(`More music like ${homeData.topArtist}`);
-    }
-
-    if (homeData.vibe?.word) {
-      suggestions.push(`${homeData.vibe.word} — something I haven't heard yet`);
-    }
-
-    if (homeData.burnout) {
-      suggestions.push(`Something completely different — taking a break from "${homeData.burnout.trackName}"`);
-    }
-
-    return suggestions.slice(0, 2);
+    const out: string[] = [];
+    if (homeData.topArtist && homeData.topGenres?.[0])
+      out.push(`More ${homeData.topGenres[0]} like ${homeData.topArtist}`);
+    else if (homeData.topArtist)
+      out.push(`More music like ${homeData.topArtist}`);
+    if (homeData.vibe?.word)
+      out.push(`${homeData.vibe.word} — something I haven't heard yet`);
+    if (homeData.burnout)
+      out.push(`Something completely different — taking a break from "${homeData.burnout.trackName}"`);
+    return out.slice(0, 2);
   }, [homeData]);
 
-  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || seedTrack !== null;
+  // Context chips for the selected mood
+  const contextChips = selectedMood ? (CONTEXT_BY_MOOD[selectedMood] ?? []) : [];
 
-  // Has any advanced option been customised?
+  // Build the combined prompt sent to Claude
+  function buildPrompt(): string {
+    const parts: string[] = [];
+    if (promptText.trim()) parts.push(promptText.trim());
+    if (selectedMood && selectedContext) parts.push(`${selectedMood} mood for ${selectedContext}`);
+    else if (selectedMood) parts.push(`${selectedMood} energy`);
+    return parts.join(" — ");
+  }
+
+  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null || seedTrack !== null;
+
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
   async function generate() {
@@ -197,7 +272,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: promptText.trim(),
+          prompt: buildPrompt(),
           seedTrack: seedTrack ? { trackName: seedTrack.trackName, artistName: seedTrack.artistName } : null,
           sessionMinutes: sessionMins,
           familiarity: vibe,
@@ -221,6 +296,8 @@ export default function DashboardPage() {
   function reset() {
     setPhase("pick");
     setPromptText("");
+    setSelectedMood(null);
+    setSelectedContext(null);
     setSeedTrack(null);
     setPlaylist(null);
     setFeedbackMode(false);
@@ -239,9 +316,8 @@ export default function DashboardPage() {
       const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const label = generatedDiscovery
         ? `Discoveries — ${dateLabel}`
-        : seedTrack
-        ? `Built around "${seedTrack.trackName}"`
-        : promptText.slice(0, 40) || "My Playlist";
+        : seedTrack ? `Built around "${seedTrack.trackName}"`
+        : buildPrompt().slice(0, 40) || "My Playlist";
       const res = await fetch("/api/spotify/playlists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -270,6 +346,13 @@ export default function DashboardPage() {
   }
 
   const firstName = homeData?.profile?.displayName?.split(" ")[0] ?? null;
+
+  // Label shown in result header
+  const resultLabel = generatedDiscovery
+    ? null
+    : seedTrack
+    ? `Based on ${seedTrack.trackName}`
+    : buildPrompt().slice(0, 50) || null;
 
   return (
     <div className="space-y-5 md:space-y-8 max-w-4xl mx-auto">
@@ -313,65 +396,103 @@ export default function DashboardPage() {
 
         {/* ── PICK ─────────────────────────────────────────────────────────── */}
         {phase === "pick" && (
-          <div className="p-4 space-y-4">
+          <div className="p-4 space-y-5">
 
             {/* Header */}
             <div className="flex items-center justify-between">
-              <p className="text-sm font-bold">Generate a playlist</p>
+              <p className="text-sm font-bold">What&apos;s the mood?</p>
               <button onClick={handleSync} disabled={syncing} title="Sync from Spotify" className="text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1 shrink-0">
                 <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
               </button>
             </div>
 
-            {/* Activity chips — 4 × 2 grid, all visible */}
-            <div className="grid grid-cols-4 gap-1.5">
-              {ACTIVITY_CHIPS.map((chip) => (
-                <button
-                  key={chip.label}
-                  onClick={() => { setPromptText(chip.prompt); setSeedTrack(null); textareaRef.current?.focus(); }}
-                  className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
-                    promptText === chip.prompt
-                      ? "border-primary bg-primary/15 text-primary"
-                      : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
-                  }`}
-                >
-                  <span className="text-base leading-none">{chip.emoji}</span>
-                  <span className="text-[10px]">{chip.label}</span>
-                </button>
-              ))}
+            {/* ── 1. Prompt ──────────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <textarea
+                ref={textareaRef}
+                value={promptText}
+                onChange={(e) => { setPromptText(e.target.value); if (e.target.value) setSeedTrack(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
+                placeholder={selectedMood
+                  ? `${selectedMood}${selectedContext ? ` for ${selectedContext}` : ""} — add more detail or just build it`
+                  : "Describe the vibe you want…"}
+                rows={2}
+                className="w-full resize-none rounded-xl bg-accent/50 border border-border px-3.5 py-3 text-sm placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
+              />
+
+              {/* Smart suggestion chips */}
+              {!homeLoading && smartSuggestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {smartSuggestions.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => { setPromptText(s); setSeedTrack(null); }}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        promptText === s
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border/60 bg-accent/30 text-muted-foreground hover:text-foreground hover:border-border"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Textarea */}
-            <textarea
-              ref={textareaRef}
-              value={promptText}
-              onChange={(e) => { setPromptText(e.target.value); if (e.target.value) setSeedTrack(null); }}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
-              placeholder="Describe a vibe, activity, or feeling…"
-              rows={2}
-              className="w-full resize-none rounded-xl bg-accent/50 border border-border px-3.5 py-3 text-sm placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
-            />
-
-            {/* Smart suggestion chips — data-driven only */}
-            {!homeLoading && smartSuggestions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {smartSuggestions.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => { setPromptText(s); setSeedTrack(null); textareaRef.current?.focus(); }}
-                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                      promptText === s
-                        ? "border-primary/50 bg-primary/10 text-primary"
-                        : "border-border/60 bg-accent/30 text-muted-foreground hover:text-foreground hover:border-border"
-                    }`}
-                  >
-                    {s}
-                  </button>
+            {/* ── 2. Mood grid ───────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Choose a mood</p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {MOOD_CHIPS.map((chip) => (
+                  <MoodChip
+                    key={chip.label}
+                    emoji={chip.emoji}
+                    label={chip.label}
+                    active={selectedMood === chip.label}
+                    onClick={() => {
+                      if (selectedMood === chip.label) {
+                        setSelectedMood(null);
+                        setSelectedContext(null);
+                      } else {
+                        setSelectedMood(chip.label);
+                        setSelectedContext(null);
+                      }
+                    }}
+                  />
                 ))}
+              </div>
+            </div>
+
+            {/* ── 3. Context (progressive reveal) ────────────────────────── */}
+            {selectedMood && contextChips.length > 0 && (
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
+                  Make it for…
+                </p>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {contextChips.map((chip) => (
+                    <button
+                      key={chip.label}
+                      onClick={() => {
+                        setSelectedContext(selectedContext === chip.label ? null : chip.label);
+                        if (selectedContext !== chip.label) setSeedTrack(null);
+                      }}
+                      className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
+                        selectedContext === chip.label
+                          ? "border-primary bg-primary/15 text-primary"
+                          : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
+                      }`}
+                    >
+                      <span className="text-base leading-none">{chip.emoji}</span>
+                      <span className="text-[10px] text-center leading-tight">{chip.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
-            {/* Seed from recent tracks */}
+            {/* ── Seed from recent tracks ─────────────────────────────────── */}
             {!homeLoading && (homeData?.recentTopTracks.length ?? 0) > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
@@ -385,7 +506,7 @@ export default function DashboardPage() {
                     return (
                       <button
                         key={t.spotifyTrackId}
-                        onClick={() => { setSeedTrack(isSelected ? null : t); if (!isSelected) setPromptText(""); }}
+                        onClick={() => { setSeedTrack(isSelected ? null : t); if (!isSelected) { setPromptText(""); setSelectedMood(null); setSelectedContext(null); } }}
                         className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border shrink-0 transition-all ${isSelected ? "border-primary bg-primary/10" : "border-border bg-accent/40 hover:border-border/80 hover:bg-accent/60"}`}
                       >
                         {t.albumImageUrl && <img src={t.albumImageUrl} alt={t.trackName} className="w-7 h-7 rounded object-cover shrink-0" />}
@@ -403,84 +524,78 @@ export default function DashboardPage() {
 
             {homeLoading && (
               <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-11 w-32 rounded-xl shrink-0" />)}
+                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-11 w-32 rounded-xl shrink-0" />)}
               </div>
             )}
 
-            {/* ── Always-visible controls ─────────────────────────────────── */}
-            <div className="space-y-3">
+            {/* ── 4. Fine-tune ────────────────────────────────────────────── */}
+            <div className="space-y-3 pt-1">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Fine-tune</p>
 
-              {/* Intensity */}
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Intensity</p>
-                <div className="flex gap-1.5">
-                  <Pill active={intensity === "low"}  onClick={() => setIntensity("low")}>Calm</Pill>
-                  <Pill active={intensity === "mid"}  onClick={() => setIntensity("mid")}>Balanced</Pill>
-                  <Pill active={intensity === "high"} onClick={() => setIntensity("high")}>Energetic</Pill>
+              <div className="space-y-2.5">
+                {/* Intensity */}
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-muted-foreground/60 w-14 shrink-0">Intensity</span>
+                  <div className="flex gap-1.5 flex-1">
+                    <Pill active={intensity === "low"}  onClick={() => setIntensity("low")}>Calm</Pill>
+                    <Pill active={intensity === "mid"}  onClick={() => setIntensity("mid")}>Balanced</Pill>
+                    <Pill active={intensity === "high"} onClick={() => setIntensity("high")}>Energetic</Pill>
+                  </div>
                 </div>
-              </div>
 
-              {/* Duration */}
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Duration</p>
-                <div className="flex gap-1.5">
-                  <Pill active={sessionMins === 20}  onClick={() => setSessionMins(20)}>20 min</Pill>
-                  <Pill active={sessionMins === 60}  onClick={() => setSessionMins(60)}>1 hour</Pill>
-                  <Pill active={sessionMins === 120} onClick={() => setSessionMins(120)}>2 hr+</Pill>
+                {/* Duration */}
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-muted-foreground/60 w-14 shrink-0">Duration</span>
+                  <div className="flex gap-1.5 flex-1">
+                    <Pill active={sessionMins === 20}  onClick={() => setSessionMins(20)}>20 min</Pill>
+                    <Pill active={sessionMins === 60}  onClick={() => setSessionMins(60)}>1 hour</Pill>
+                    <Pill active={sessionMins === 120} onClick={() => setSessionMins(120)}>2 hr+</Pill>
+                  </div>
                 </div>
-              </div>
 
-              {/* Vibe */}
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Vibe</p>
-                <div className="flex gap-1.5">
-                  <Pill active={vibe === "familiar"} onClick={() => setVibe("familiar")}>Familiar</Pill>
-                  <Pill active={vibe === "mixed"}    onClick={() => setVibe("mixed")}>Mixed</Pill>
-                  <Pill active={vibe === "fresh"} violet onClick={() => setVibe("fresh")}>
-                    <span className="flex items-center justify-center gap-1"><Telescope className="w-3 h-3" />Fresh</span>
-                  </Pill>
+                {/* Discovery */}
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-muted-foreground/60 w-14 shrink-0">Discovery</span>
+                  <div className="flex gap-1.5 flex-1">
+                    <Pill active={vibe === "familiar"} onClick={() => setVibe("familiar")}>Familiar</Pill>
+                    <Pill active={vibe === "mixed"}    onClick={() => setVibe("mixed")}>Mixed</Pill>
+                    <Pill active={vibe === "fresh"} violet onClick={() => setVibe("fresh")}>
+                      <span className="flex items-center justify-center gap-1"><Telescope className="w-3 h-3" />Fresh</span>
+                    </Pill>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* ── More options (advanced, hidden by default) ──────────────── */}
+            {/* ── More options ────────────────────────────────────────────── */}
             <button
               onClick={() => setShowMore(!showMore)}
               className={`flex items-center gap-1 text-[11px] transition-colors ${
-                hasAdvanced
-                  ? "text-primary"
-                  : "text-muted-foreground/50 hover:text-muted-foreground"
+                hasAdvanced ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
               }`}
             >
               {showMore ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              More options{hasAdvanced ? " ·" : ""}
-              {hasAdvanced && <span className="ml-0.5 text-primary/80">customised</span>}
+              More options{hasAdvanced && <span className="ml-0.5 text-primary/80">· customised</span>}
             </button>
 
             {showMore && (
-              <div className="space-y-3 rounded-xl bg-accent/20 border border-border/50 px-3 py-3">
-
-                {/* Vocals */}
+              <div className="space-y-3 rounded-xl bg-accent/20 border border-border/50 px-3 py-3 animate-in fade-in slide-in-from-top-1 duration-150">
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Vocals</p>
                   <div className="flex gap-1.5">
-                    <Pill active={vocals === "any"}          onClick={() => setVocals("any")}>Any</Pill>
-                    <Pill active={vocals === "lyrics"}       onClick={() => setVocals("lyrics")}>Lyrics</Pill>
+                    <Pill active={vocals === "any"} onClick={() => setVocals("any")}>Any</Pill>
+                    <Pill active={vocals === "lyrics"} onClick={() => setVocals("lyrics")}>Lyrics</Pill>
                     <Pill active={vocals === "instrumental"} onClick={() => setVocals("instrumental")}>Instrumental</Pill>
                   </div>
                 </div>
-
-                {/* Language */}
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Language</p>
                   <div className="flex gap-1.5">
-                    <Pill active={language === "any"}     onClick={() => setLanguage("any")}>Any</Pill>
+                    <Pill active={language === "any"} onClick={() => setLanguage("any")}>Any</Pill>
                     <Pill active={language === "english"} onClick={() => setLanguage("english")}>English</Pill>
-                    <Pill active={language === "match"}   onClick={() => setLanguage("match")}>My taste</Pill>
+                    <Pill active={language === "match"} onClick={() => setLanguage("match")}>My taste</Pill>
                   </div>
                 </div>
-
-                {/* Genre lock */}
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Genre</p>
                   <input
@@ -491,8 +606,6 @@ export default function DashboardPage() {
                     className="w-full rounded-lg bg-accent/50 border border-border px-3 py-1.5 text-xs placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
                   />
                 </div>
-
-                {/* Artist preference */}
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Artist</p>
                   <input
@@ -503,7 +616,6 @@ export default function DashboardPage() {
                     className="w-full rounded-lg bg-accent/50 border border-border px-3 py-1.5 text-xs placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
                   />
                 </div>
-
               </div>
             )}
 
@@ -516,7 +628,7 @@ export default function DashboardPage() {
               }`}
             >
               <Sparkles className="w-4 h-4 mr-2" />
-              {vibe === "fresh" ? "Discover music" : "Build my playlist"}
+              {vibe === "fresh" ? "Discover music" : "Build this vibe"}
             </Button>
 
           </div>
@@ -529,7 +641,7 @@ export default function DashboardPage() {
               <Loader2 className={`w-7 h-7 animate-spin ${generatedDiscovery ? "text-violet-400" : "text-primary"}`} />
             </div>
             <div>
-              <p className="font-bold text-lg">{generatedDiscovery ? "Hunting discoveries…" : "Building your arc…"}</p>
+              <p className="font-bold text-lg">{generatedDiscovery ? "Hunting discoveries…" : "Building your vibe…"}</p>
               <p className="text-sm text-muted-foreground mt-1 max-w-xs">
                 {generatedDiscovery
                   ? "Scanning your taste DNA for artists you've never heard"
@@ -546,7 +658,6 @@ export default function DashboardPage() {
               const playableUris = playlist.tracks.filter((t) => t.spotifyUri).map((t) => t.spotifyUri!);
               return (
                 <div className="space-y-2">
-                  {/* Row 1: label + action buttons */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                       {generatedDiscovery && (
@@ -554,16 +665,14 @@ export default function DashboardPage() {
                           <Telescope className="w-3 h-3" /> Discovery
                         </span>
                       )}
-                      {!generatedDiscovery && seedTrack ? (
-                        <>
-                          {seedTrack.albumImageUrl && <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />}
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate">Based on {seedTrack.trackName}</span>
-                        </>
-                      ) : !generatedDiscovery ? (
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[160px]">
-                          &ldquo;{promptText.length > 40 ? promptText.slice(0, 40) + "…" : promptText}&rdquo;
+                      {resultLabel && !generatedDiscovery && (
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[180px]">
+                          &ldquo;{resultLabel.length > 50 ? resultLabel.slice(0, 50) + "…" : resultLabel}&rdquo;
                         </span>
-                      ) : null}
+                      )}
+                      {seedTrack?.albumImageUrl && !generatedDiscovery && (
+                        <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />
+                      )}
                       <span className="text-muted-foreground/30 text-[10px] shrink-0">·</span>
                       <span className="text-[10px] text-muted-foreground shrink-0">{sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}</span>
                     </div>
@@ -588,7 +697,6 @@ export default function DashboardPage() {
                       </button>
                     </div>
                   </div>
-                  {/* Row 2: intro — full width, 2-line clamp */}
                   <p className="text-xs text-muted-foreground italic leading-relaxed line-clamp-2">{playlist.intro}</p>
                 </div>
               );
