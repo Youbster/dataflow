@@ -15,7 +15,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Search, UserPlus, Link2, Copy, Check } from "lucide-react";
+import { Search, UserPlus, Link2, Copy, Check, GitCompare } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import type { UserProfile } from "@/types/database";
 
@@ -233,25 +234,37 @@ export default function SocialPage() {
             {following.map((user) => (
               <Card
                 key={user.id}
-                className="hover:border-primary/30 transition-colors cursor-pointer"
+                className="hover:border-primary/30 transition-colors"
               >
-                <CardContent className="p-4 flex items-center gap-3">
-                  <Avatar className="w-10 h-10">
-                    <AvatarImage src={user.avatar_url ?? undefined} />
-                    <AvatarFallback>
-                      {user.display_name.charAt(0)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">
-                      {user.display_name}
-                    </p>
-                    {user.username && (
-                      <p className="text-xs text-muted-foreground">
-                        @{user.username}
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="w-10 h-10">
+                      <AvatarImage src={user.avatar_url ?? undefined} />
+                      <AvatarFallback>
+                        {user.display_name.charAt(0)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">
+                        {user.display_name}
                       </p>
-                    )}
+                      {user.username && (
+                        <p className="text-xs text-muted-foreground">
+                          @{user.username}
+                        </p>
+                      )}
+                    </div>
                   </div>
+                  <Link href={`/social/compare/${user.id}`}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full gap-1.5 text-xs"
+                    >
+                      <GitCompare className="w-3.5 h-3.5" />
+                      Compare Taste
+                    </Button>
+                  </Link>
                 </CardContent>
               </Card>
             ))}

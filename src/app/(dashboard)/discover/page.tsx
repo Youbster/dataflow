@@ -16,6 +16,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 interface DiscoverProfile {
   archetype: { name: string; tagline: string; description: string; traits: string[] };
   listeningStory: string;
@@ -113,6 +117,36 @@ interface ArtistDive {
   vibe: string;
 }
 
+// ---------------------------------------------------------------------------
+// Cache helpers
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function loadCache<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw) as { ts: number; data: T };
+    if (Date.now() - ts > CACHE_TTL_MS) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveCache<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch {
+    // storage may be full — silently ignore
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 const timeLabel = (h: number) =>
   h < 6 ? "Late Night" : h < 12 ? "Morning" : h < 18 ? "Afternoon" : h < 22 ? "Evening" : "Night";
 
@@ -122,6 +156,16 @@ const hourLabel = (h: number) => {
   if (h === 12) return "12pm";
   return `${h - 12}pm`;
 };
+
+function gemPopularityLabel(popularity: number): string {
+  if (popularity < 30) return "Underground gem";
+  if (popularity < 50) return "Under the radar";
+  return "Semi-known";
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function DiscoverPage() {
   const [profile, setProfile] = useState<DiscoverProfile | null>(null);
@@ -143,13 +187,49 @@ export default function DiscoverPage() {
   const [flashback, setFlashback] = useState<FlashbackTrack[] | null>(null);
   const [flashbackLoading, setFlashbackLoading] = useState(false);
 
-  useEffect(() => { loadForecast(); loadDna(); }, []);
+  // On mount: restore caches or auto-fetch
+  useEffect(() => {
+    // --- Discover cache ---
+    const cachedDiscover = loadCache<{
+      profile: DiscoverProfile;
+      hiddenGems: HiddenGem[];
+      patterns: PatternData;
+      evolution: EvolutionData;
+    }>("df_discover_v1");
+
+    if (cachedDiscover) {
+      setProfile(cachedDiscover.profile);
+      setHiddenGems(cachedDiscover.hiddenGems);
+      setPatterns(cachedDiscover.patterns);
+      setEvolution(cachedDiscover.evolution);
+      setGenerated(true);
+    } else {
+      // Auto-generate on first visit (stale or empty cache)
+      generate();
+    }
+
+    // --- DNA cache ---
+    const cachedDna = loadCache<MusicDNA>("df_dna_v1");
+    if (cachedDna) {
+      setDna(cachedDna);
+      setDnaLoading(false);
+    } else {
+      loadDna();
+    }
+
+    loadForecast();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function loadDna() {
     setDnaLoading(true);
     try {
       const res = await fetch("/api/ai/music-dna");
-      if (res.ok) setDna(await res.json());
+      if (res.ok) {
+        const data: MusicDNA = await res.json();
+        setDna(data);
+        saveCache("df_dna_v1", data);
+      }
     } catch { /* silent */ }
     finally { setDnaLoading(false); }
   }
@@ -197,6 +277,12 @@ export default function DiscoverPage() {
       setPatterns(data.patterns);
       setEvolution(data.evolution);
       setGenerated(true);
+      saveCache("df_discover_v1", {
+        profile: data.profile,
+        hiddenGems: data.hiddenGems,
+        patterns: data.patterns,
+        evolution: data.evolution,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate story");
     } finally {
@@ -229,7 +315,9 @@ export default function DiscoverPage() {
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 1. Header                                                           */}
+      {/* ------------------------------------------------------------------ */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Your Music Story</h1>
@@ -247,113 +335,23 @@ export default function DiscoverPage() {
         </Button>
       </div>
 
-      {/* Burnout Alert */}
-      {forecastLoading && (
-        <Skeleton className="h-32 rounded-xl" />
-      )}
-      {burnout && !forecastLoading && (
-        <Card className="border-orange-500/30 bg-orange-500/5">
-          <CardContent className="pt-5 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-orange-500/15 flex items-center justify-center shrink-0">
-                <Flame className="w-5 h-5 text-orange-400" />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-semibold">Burnout Alert</p>
-                  <Badge variant="outline" className="border-orange-500/40 text-orange-400 text-xs">
-                    {burnout.playCount}× in 3 days · {burnout.pct}% of your listening
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  <span className="font-medium text-foreground">"{burnout.trackName}"</span> by {burnout.artistName}
-                </p>
-                <p className="text-xs text-muted-foreground italic mt-1">{burnout.burnoutInsight}</p>
-              </div>
-            </div>
-            <div className="rounded-lg border border-orange-500/20 bg-background p-4 space-y-2">
-              <p className="text-xs font-medium text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Zap className="w-3.5 h-3.5" />
-                Sonic Palate Cleanser
-              </p>
-              <p className="font-medium">{burnout.cleanser.trackName}
-                <span className="text-muted-foreground font-normal"> · {burnout.cleanser.artistName}</span>
-              </p>
-              <p className="text-xs text-muted-foreground leading-relaxed">{burnout.cleanser.reasoning}</p>
-              <div className="flex gap-4 pt-1">
-                <div>
-                  <p className="text-xs text-muted-foreground">Shared DNA</p>
-                  <p className="text-xs font-medium">{burnout.cleanser.sharedDNA}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Fresh twist</p>
-                  <p className="text-xs font-medium">{burnout.cleanser.freshElement}</p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* ------------------------------------------------------------------ */}
+      {/* 2. Loading skeletons                                                */}
+      {/* ------------------------------------------------------------------ */}
+      {loading && (
+        <div className="space-y-6">
+          <Skeleton className="h-52 rounded-xl" />
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Skeleton className="h-72 rounded-xl" />
+            <Skeleton className="h-72 rounded-xl" />
+          </div>
+          <Skeleton className="h-48 rounded-xl" />
+        </div>
       )}
 
-      {/* Weekly Vibe Forecast */}
-      {forecast && weather && !forecastLoading && (
-        <Card className="border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-transparent">
-          <CardContent className="pt-5 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center shrink-0">
-                  <CloudRain className="w-5 h-5 text-blue-400" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold">Weekly Vibe Forecast</p>
-                    <span className="text-xs text-muted-foreground">
-                      {weather.city} · {weather.tempC}°C · {weather.condition}
-                    </span>
-                  </div>
-                  <p className="text-xl font-bold mt-1">{forecast.weekTheme}</p>
-                  <Badge variant="outline" className="mt-1 border-blue-500/30 text-blue-400 text-xs">
-                    {forecast.weeklyMood}
-                  </Badge>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-sm text-muted-foreground leading-relaxed">{forecast.weatherInsight}</p>
-
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                You'll crave this week
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {forecast.predictedGenres.map((g) => (
-                  <Badge key={g} className="text-xs bg-blue-500/10 text-blue-400 border-0">{g}</Badge>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                Predicted obsessions
-              </p>
-              <div className="space-y-2.5">
-                {forecast.predictions.map((p, i) => (
-                  <div key={i} className="flex gap-3 text-sm">
-                    <span className="text-blue-400 font-medium shrink-0 w-4">{i + 1}</span>
-                    <div>
-                      <span className="font-medium">{p.trackName}</span>
-                      <span className="text-muted-foreground"> · {p.artistName}</span>
-                      <p className="text-xs text-muted-foreground mt-0.5">{p.reason}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Empty state */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 3. Empty state — only when nothing is generated yet and not loading */}
+      {/* ------------------------------------------------------------------ */}
       {!generated && !loading && (
         <Card className="border-dashed">
           <CardContent className="py-16 flex flex-col items-center gap-4 text-center">
@@ -367,27 +365,17 @@ export default function DiscoverPage() {
                 and a personalized artist exploration guide — all powered by AI.
               </p>
             </div>
-            <Button onClick={generate} size="lg" className="mt-2 gap-2">
+            <Button onClick={generate} size="lg" className="mt-2 gap-2" disabled={loading}>
               <Sparkles className="w-4 h-4" />
-              Generate My Story
+              {loading ? "Generating..." : "Generate My Story"}
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* Loading skeletons */}
-      {loading && (
-        <div className="space-y-6">
-          <Skeleton className="h-52 rounded-xl" />
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Skeleton className="h-72 rounded-xl" />
-            <Skeleton className="h-72 rounded-xl" />
-          </div>
-          <Skeleton className="h-48 rounded-xl" />
-        </div>
-      )}
-
-      {/* Music Identity Card */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 4. Music Identity (archetype)                                       */}
+      {/* ------------------------------------------------------------------ */}
       {profile && !loading && (
         <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">
           <CardContent className="pt-6">
@@ -415,16 +403,21 @@ export default function DiscoverPage() {
         </Card>
       )}
 
-      {/* Patterns + Hidden Gems */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 5. Your Listening Habits + Hidden Gems (2-col grid)                */}
+      {/* ------------------------------------------------------------------ */}
       {patterns && profile && !loading && (
         <div className="grid gap-6 lg:grid-cols-2">
-          {/* Listening Patterns */}
+          {/* Listening Habits */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <Clock className="w-4 h-4 text-primary" />
-                When You Listen
+                Your Listening Habits
               </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                When you actually reach for music during the week
+              </p>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-xs text-muted-foreground leading-relaxed">
@@ -487,6 +480,9 @@ export default function DiscoverPage() {
                 <Gem className="w-4 h-4 text-primary" />
                 Hidden Gems
               </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Tracks you love that most people haven&apos;t discovered yet
+              </p>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-xs text-muted-foreground leading-relaxed">
@@ -522,7 +518,7 @@ export default function DiscoverPage() {
                           variant="outline"
                           className="text-xs border-primary/30 text-primary"
                         >
-                          {gem.popularity}% known
+                          {gemPopularityLabel(gem.popularity)}
                         </Badge>
                       </div>
                     </div>
@@ -534,13 +530,15 @@ export default function DiscoverPage() {
         </div>
       )}
 
-      {/* Taste Evolution */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 6. How Your Sound Has Changed (evolution)                           */}
+      {/* ------------------------------------------------------------------ */}
       {evolution && profile && !loading && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-primary" />
-              Your Taste Journey
+              How Your Sound Has Changed
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -608,15 +606,17 @@ export default function DiscoverPage() {
         </Card>
       )}
 
-      {/* Music DNA — always visible, auto-loads */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 7. Your Sound Shift (DNA) + Flashback — always auto-loads           */}
+      {/* ------------------------------------------------------------------ */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
             <Dna className="w-4 h-4 text-primary" />
-            Music DNA — Then vs Now
+            Your Sound Shift
           </CardTitle>
           <p className="text-xs text-muted-foreground">
-            How your taste has shifted between your all-time history and what you're into right now
+            See what genres and artists you&apos;ve gained, kept, or left behind
           </p>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -763,7 +763,119 @@ export default function DiscoverPage() {
         </CardContent>
       </Card>
 
-      {/* Artist Deep Dive — always visible */}
+      {/* ------------------------------------------------------------------ */}
+      {/* 8. Burnout Alert — moved below main content                         */}
+      {/* ------------------------------------------------------------------ */}
+      {forecastLoading && (
+        <Skeleton className="h-32 rounded-xl" />
+      )}
+      {burnout && !forecastLoading && (
+        <Card className="border-orange-500/30 bg-orange-500/5">
+          <CardContent className="pt-5 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/15 flex items-center justify-center shrink-0">
+                <Flame className="w-5 h-5 text-orange-400" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold">Burnout Alert</p>
+                  <Badge variant="outline" className="border-orange-500/40 text-orange-400 text-xs">
+                    {burnout.playCount}× in 3 days · {burnout.pct}% of your listening
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  <span className="font-medium text-foreground">&quot;{burnout.trackName}&quot;</span> by {burnout.artistName}
+                </p>
+                <p className="text-xs text-muted-foreground italic mt-1">{burnout.burnoutInsight}</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-orange-500/20 bg-background p-4 space-y-2">
+              <p className="text-xs font-medium text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                Try this instead
+              </p>
+              <p className="font-medium">{burnout.cleanser.trackName}
+                <span className="text-muted-foreground font-normal"> · {burnout.cleanser.artistName}</span>
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{burnout.cleanser.reasoning}</p>
+              <div className="flex gap-4 pt-1">
+                <div>
+                  <p className="text-xs text-muted-foreground">Why it&apos;s familiar</p>
+                  <p className="text-xs font-medium">{burnout.cleanser.sharedDNA}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">What&apos;s new</p>
+                  <p className="text-xs font-medium">{burnout.cleanser.freshElement}</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 9. Weekly Vibe Forecast — moved below burnout                       */}
+      {/* ------------------------------------------------------------------ */}
+      {forecast && weather && !forecastLoading && (
+        <Card className="border-blue-500/20 bg-gradient-to-br from-blue-500/5 to-transparent">
+          <CardContent className="pt-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-500/15 flex items-center justify-center shrink-0">
+                  <CloudRain className="w-5 h-5 text-blue-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold">Weekly Vibe Forecast</p>
+                    <span className="text-xs text-muted-foreground">
+                      {weather.city} · {weather.tempC}°C · {weather.condition}
+                    </span>
+                  </div>
+                  <p className="text-xl font-bold mt-1">{forecast.weekTheme}</p>
+                  <Badge variant="outline" className="mt-1 border-blue-500/30 text-blue-400 text-xs">
+                    {forecast.weeklyMood}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-sm text-muted-foreground leading-relaxed">{forecast.weatherInsight}</p>
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                You&apos;ll crave this week
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {forecast.predictedGenres.map((g) => (
+                  <Badge key={g} className="text-xs bg-blue-500/10 text-blue-400 border-0">{g}</Badge>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                Tracks you&apos;ll probably love this week
+              </p>
+              <div className="space-y-2.5">
+                {forecast.predictions.map((p, i) => (
+                  <div key={i} className="flex gap-3 text-sm">
+                    <span className="text-blue-400 font-medium shrink-0 w-4">{i + 1}</span>
+                    <div>
+                      <span className="font-medium">{p.trackName}</span>
+                      <span className="text-muted-foreground"> · {p.artistName}</span>
+                      <p className="text-xs text-muted-foreground mt-0.5">{p.reason}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 10. Artist Deep Dive — always at bottom                             */}
+      {/* ------------------------------------------------------------------ */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
