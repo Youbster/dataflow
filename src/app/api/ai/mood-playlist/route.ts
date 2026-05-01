@@ -53,8 +53,10 @@ export async function POST(request: NextRequest) {
   const userPrompt: string = body.prompt ?? "";
   const seedTrack: { trackName: string; artistName: string } | null = body.seedTrack ?? null;
   const sessionMinutes: number = body.sessionMinutes ?? 60;
+  const familiarity: "mixed" | "fresh" = body.familiarity ?? "mixed";
+  const intensity: "low" | "mid" | "high" = body.intensity ?? "mid";
 
-  if (!userPrompt.trim() && !seedTrack) {
+  if (!userPrompt.trim() && !seedTrack && familiarity !== "fresh") {
     return NextResponse.json({ error: "Provide a description or seed track" }, { status: 400 });
   }
 
@@ -122,21 +124,61 @@ export async function POST(request: NextRequest) {
     else if (timeCtx.dayLabel.includes("Friday"))      timeNote = "Friday — week wrapping up, joy and release are welcome.";
     else if (timeCtx.isWeekend)                        timeNote = "Weekend — more emotional openness, playlists can breathe.";
 
+    // Intensity hint
+    const intensityStr =
+      intensity === "high" ? "\nINTENSITY: HIGH — Everything driving, energetic, upbeat. No slow moments." :
+      intensity === "low"  ? "\nINTENSITY: LOW — Keep everything calm, gentle, ambient throughout." :
+      "";
+
     // Build the request description for Claude
     const requestLines: string[] = [];
     if (userPrompt.trim()) requestLines.push(`"${userPrompt.trim()}"`);
     if (seedTrack) requestLines.push(
       `Build the playlist around this as the anchor: "${seedTrack.trackName}" by ${seedTrack.artistName}`
     );
-    const requestStr = requestLines.join("\n");
+    const requestStr = requestLines.join("\n") || "Discover new music matching my taste";
 
-    const prompt = `Generate a ${counts.total}-track playlist.
+    // ── Fresh / Discovery mode prompt ─────────────────────────────────────────
+    const recentTracksStr = [...recentSet].slice(0, 20).map(k => k.split("|||")[0]).join(", ");
+
+    const prompt = familiarity === "fresh"
+      ? `Generate ${counts.total} all-new discovery tracks for this listener.
+
+WHAT THEY WANT: ${requestStr}
+TIME: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}${intensityStr}
+
+THEIR TASTE DNA (style/genre guide only — do NOT suggest any of these artists):
+- Core genres: ${genreStr || "varied"}
+${nativeLanguages.length > 0 ? `- Also appreciates: ${nativeLanguages.join(", ")} music` : ""}
+- Artists they already know (EXCLUDE ALL): ${topArtists || "none"}
+- Recently played tracks (EXCLUDE ALL): ${recentTracksStr || "none"}
+
+DISCOVERY MODE RULES:
+- ALL ${counts.total} tracks MUST be by artists completely new to this listener
+- Match their genre DNA but find lesser-known acts, cult favourites, underground gems
+- Every track should feel like "How did I not know this artist?"
+- SPOTIFY ACCURACY: 100% certain the track exists on Spotify with exact title + artist
+
+Return ONLY valid JSON:
+{
+  "intro": "2 sentences. Hype these hand-picked discoveries curated from their exact taste DNA.",
+  "tracks": [
+    {
+      "trackName": "exact Spotify track name",
+      "artistName": "exact primary artist name",
+      "section": "discovery",
+      "reason": "one sentence — why this artist fits their taste perfectly"
+    }
+  ]
+}`
+      // ── Normal / Mixed mode prompt ────────────────────────────────────────────
+      : `Generate a ${counts.total}-track playlist.
 
 WHAT THE USER WANTS:
 ${requestStr}
 
 TIME CONTEXT: ${timeCtx.timeLabel}, ${timeCtx.dayLabel}${timeNote ? ` — ${timeNote}` : ""}
-SESSION: ~${sessionMinutes} min → ${counts.total} tracks
+SESSION: ~${sessionMinutes} min → ${counts.total} tracks${intensityStr}
 
 THEIR TASTE PROFILE:
 - Current top artists: ${topArtists || "no data yet"}

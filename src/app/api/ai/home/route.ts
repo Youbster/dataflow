@@ -14,11 +14,12 @@ export async function GET() {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [{ data: shortTracks }, { data: shortArtists }, { data: history7d }, { data: history3d }] = await Promise.all([
+    const [{ data: shortTracks }, { data: shortArtists }, { data: history7d }, { data: history3d }, { data: profileData }] = await Promise.all([
       admin.from("user_top_tracks").select("*").eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(15),
       admin.from("user_top_artists").select("*").eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(15),
       admin.from("user_listening_history").select("spotify_track_id, track_name, artist_names, album_image_url, played_at").eq("user_id", user.id).gte("played_at", sevenDaysAgo).order("played_at", { ascending: false }),
       admin.from("user_listening_history").select("spotify_track_id, track_name, artist_names").eq("user_id", user.id).gte("played_at", threeDaysAgo),
+      admin.from("user_profiles").select("display_name, avatar_url").eq("id", user.id).maybeSingle(),
     ]);
 
     const plays7d = history7d ?? [];
@@ -30,7 +31,10 @@ export async function GET() {
     for (const a of shortArtists ?? []) {
       for (const g of a.genres ?? []) genreCounts[g] = (genreCounts[g] ?? 0) + 1;
     }
-    const topGenre = Object.entries(genreCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    const sortedGenres = Object.entries(genreCounts).sort((a, b) => b[1] - a[1]);
+    const topGenre  = sortedGenres[0]?.[0] ?? null;
+    const topGenres = sortedGenres.slice(0, 4).map(([g]) => g);
+    const topArtist = (shortArtists ?? [])[0]?.artist_name ?? null;
 
     // Recent top tracks (this week, deduplicated by play count)
     const trackCounts: Record<string, { id: string; name: string; artist: string; count: number; img: string | null }> = {};
@@ -96,7 +100,17 @@ Return ONLY valid JSON: { "word": "...", "sentence": "..." }`,
       } catch { /* vibe is optional */ }
     }
 
-    return NextResponse.json({ stats, recentTopTracks, vibe, burnout });
+    return NextResponse.json({
+      stats,
+      topGenres,
+      topArtist,
+      profile: profileData
+        ? { displayName: profileData.display_name as string, avatarUrl: (profileData.avatar_url as string | null) ?? null }
+        : null,
+      recentTopTracks,
+      vibe,
+      burnout,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed";
     return NextResponse.json({ error: message }, { status: 500 });
