@@ -254,8 +254,14 @@ export default function DashboardPage() {
   function buildPrompt(): string {
     const parts: string[] = [];
     if (promptText.trim()) parts.push(promptText.trim());
-    if (selectedMood && selectedContext) parts.push(`${selectedMood} mood for ${selectedContext}`);
-    else if (selectedMood) parts.push(`${selectedMood} energy`);
+    if (selectedMood && selectedContext) {
+      // Combine mood label + the rich contextual description from the chip
+      const ctxChip = (CONTEXT_BY_MOOD[selectedMood] ?? []).find(c => c.label === selectedContext);
+      const desc = ctxChip?.prompt ?? `${selectedMood} mood for ${selectedContext}`;
+      parts.push(`${selectedMood} — ${desc}`);
+    } else if (selectedMood) {
+      parts.push(`${selectedMood} energy`);
+    }
     return parts.join(" — ");
   }
 
