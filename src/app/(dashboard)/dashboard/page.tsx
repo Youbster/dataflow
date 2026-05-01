@@ -123,9 +123,13 @@ export default function DashboardPage() {
   const [mysteryLoading, setMysteryLoading] = useState(true);
   const [mysteryClaiming, setMysteryClaiming] = useState(false);
 
+  // mobile quick-generate (skip configure on small screens)
+  const [mobileQuick, setMobileQuick] = useState(false);
+
   useEffect(() => {
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening");
+    if (window.innerWidth < 768) setMobileQuick(true);
     loadUser();
     syncThenLoad();
     loadMystery();
@@ -202,15 +206,16 @@ export default function DashboardPage() {
     } finally { setPromptLoading(false); }
   }
 
-  async function generateMoodPlaylist() {
-    if (!selectedMood) return;
+  async function generateMoodPlaylist(overrideMood?: string) {
+    const mood = overrideMood ?? selectedMood;
+    if (!mood) return;
     setMoodPhase("loading");
     try {
       const res = await fetch("/api/ai/mood-playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mood: selectedMood,
+          mood,
           intensity,
           sessionMinutes: sessionMins,
           environment,
@@ -226,7 +231,7 @@ export default function DashboardPage() {
       setMoodPhase("result");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to generate playlist");
-      setMoodPhase("configure");
+      setMoodPhase("pick");
     }
   }
 
@@ -278,7 +283,7 @@ export default function DashboardPage() {
   const activeMood = MOODS.find(m => m.id === selectedMood);
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto">
+    <div className="space-y-5 md:space-y-8 max-w-4xl mx-auto">
 
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -350,7 +355,14 @@ export default function DashboardPage() {
               {MOODS.map((m) => (
                 <button
                   key={m.id}
-                  onClick={() => { setSelectedMood(m.id); setMoodPhase("configure"); }}
+                  onClick={() => {
+                    setSelectedMood(m.id);
+                    if (mobileQuick) {
+                      generateMoodPlaylist(m.id);
+                    } else {
+                      setMoodPhase("configure");
+                    }
+                  }}
                   className={`relative rounded-2xl p-4 text-left border bg-gradient-to-br transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] ${m.gradient} ${m.border}`}
                 >
                   <div className="text-2xl mb-2">{m.emoji}</div>
@@ -359,6 +371,21 @@ export default function DashboardPage() {
                 </button>
               ))}
             </div>
+            {mobileQuick ? (
+              <button
+                onClick={() => setMobileQuick(false)}
+                className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors underline underline-offset-2 mx-auto block"
+              >
+                customize first
+              </button>
+            ) : (
+              <button
+                onClick={() => setMobileQuick(true)}
+                className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors underline underline-offset-2 mx-auto block md:hidden"
+              >
+                ← quick mode
+              </button>
+            )}
           </div>
         )}
 
@@ -488,7 +515,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <Button onClick={generateMoodPlaylist} className="w-full h-12 text-base font-semibold">
+            <Button onClick={() => generateMoodPlaylist()} className="w-full h-12 text-base font-semibold">
               <Sparkles className="w-4 h-4 mr-2" />
               Build my playlist
             </Button>
@@ -694,13 +721,13 @@ export default function DashboardPage() {
             {promptLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 md:flex-wrap scrollbar-none">
           {EXAMPLES.map((ex) => (
             <button
               key={ex}
               onClick={() => handlePrompt(ex)}
               disabled={promptLoading}
-              className="text-xs px-3 py-1.5 rounded-full bg-accent text-muted-foreground hover:text-foreground hover:bg-accent/80 transition-colors border border-border disabled:opacity-40"
+              className="text-xs px-3 py-1.5 rounded-full bg-accent text-muted-foreground hover:text-foreground hover:bg-accent/80 transition-colors border border-border disabled:opacity-40 shrink-0"
             >
               {ex}
             </button>
@@ -750,8 +777,8 @@ export default function DashboardPage() {
       {homeLoading ? (
         <div className="space-y-4">
           <Skeleton className="h-28 rounded-2xl" />
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}
+          <div className="flex gap-3 overflow-x-auto pb-1 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible scrollbar-none">
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl min-w-[130px] md:min-w-0 shrink-0 md:shrink" />)}
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}
@@ -766,14 +793,14 @@ export default function DashboardPage() {
               <p className="text-muted-foreground mt-1 text-sm leading-relaxed">{homeData.vibe.sentence}</p>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 md:grid md:grid-cols-4 md:gap-4 md:overflow-visible scrollbar-none">
             {[
               { label: "Plays this week",   value: homeData.stats.playsThisWeek },
               { label: "Minutes listened",  value: homeData.stats.estimatedMinutes.toLocaleString() },
               { label: "Artists explored",  value: homeData.stats.uniqueArtists },
               { label: "Top genre",         value: homeData.stats.topGenre ?? "—" },
             ].map(({ label, value }) => (
-              <div key={label} className="rounded-2xl bg-card border border-border p-4">
+              <div key={label} className="rounded-2xl bg-card border border-border p-4 min-w-[130px] shrink-0 md:min-w-0 md:shrink">
                 <p className="text-2xl font-bold truncate">{value}</p>
                 <p className="text-xs text-muted-foreground mt-1">{label}</p>
               </div>
