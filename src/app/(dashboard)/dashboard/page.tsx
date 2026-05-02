@@ -222,6 +222,29 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     return parts.join(" — ");
   }
 
+  // Auto-derive intensity from chip selection so the AI gets proper constraints
+  // without requiring the user to also touch the Intensity pills.
+  // Activity dominates (physical energy); mood is secondary when no activity is set.
+  function handleActivityClick(label: string) {
+    const next = selectedActivity === label ? null : label;
+    setSelectedActivity(next);
+    if (next === "Workout" || next === "Party")              setIntensity("high");
+    else if (next === "Wind down" || next === "Study")       setIntensity("low");
+    else if (next !== null)                                   setIntensity("mid"); // Drive, Cook, Walk, Hangout
+    // deselect → leave intensity unchanged
+  }
+
+  function handleMoodClick(label: string) {
+    const next = selectedMood === label ? null : label;
+    setSelectedMood(next);
+    // Don't override if an activity already set the intensity
+    if (selectedActivity) return;
+    if (next === "Energized" || next === "Confident")               setIntensity("high");
+    else if (next === "Chill" || next === "Dreamy" || next === "Romantic" || next === "Moody") setIntensity("low");
+    else if (next !== null)                                          setIntensity("mid"); // Focused, Happy
+    // deselect → leave intensity unchanged
+  }
+
   const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null || selectedActivity !== null;
 
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
@@ -419,7 +442,7 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
                     emoji={chip.emoji}
                     label={chip.label}
                     active={selectedMood === chip.label}
-                    onClick={() => setSelectedMood(selectedMood === chip.label ? null : chip.label)}
+                    onClick={() => handleMoodClick(chip.label)}
                   />
                 ))}
               </div>
@@ -435,7 +458,7 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
                     emoji={chip.emoji}
                     label={chip.label}
                     active={selectedActivity === chip.label}
-                    onClick={() => setSelectedActivity(selectedActivity === chip.label ? null : chip.label)}
+                    onClick={() => handleActivityClick(chip.label)}
                   />
                 ))}
               </div>

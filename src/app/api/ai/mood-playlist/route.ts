@@ -218,8 +218,11 @@ export async function POST(request: NextRequest) {
 
     // ── Shared constraint strings ─────────────────────────────────────────────
     const intensityStr =
-      intensity === "high" ? "\nINTENSITY: HIGH — everything driving and energetic, no slow moments." :
-      intensity === "low"  ? "\nINTENSITY: LOW — keep everything calm, gentle, ambient throughout."  : "";
+      intensity === "high"
+        ? "\nINTENSITY: HIGH — high-energy, driving, upbeat throughout. Reject any slow or low-key tracks."
+        : intensity === "low"
+        ? "\nINTENSITY: LOW — calm, gentle, slow-tempo only. No hype, no drops, no high-energy moments. Every track must feel relaxing."
+        : "";
 
     const constraints: string[] = [];
     if (vocals === "lyrics")       constraints.push("Only tracks WITH lyrics — no instrumentals");
