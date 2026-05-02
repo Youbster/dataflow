@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { openai, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
+import { primeTokenCache } from "@/lib/spotify/token";
 import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
 
 // Give Vercel up to 30 seconds for this function (Pro plan).
@@ -116,6 +117,19 @@ export async function POST(request: NextRequest) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const user = session.user;
+
+  // Supabase stores the Spotify access token in the session cookie right after
+  // OAuth (session.provider_token). If it's still there, seed the in-process
+  // token cache so the first Spotify API call skips the Supabase DB query
+  // entirely. After ~1 hour the session refreshes without a new provider_token,
+  // so this is a best-effort optimisation — the DB fallback handles the rest.
+  // If the token turns out to be expired, SpotifyClient.request() detects the
+  // 401 from Spotify, evicts the cache entry, and retries via DB automatically.
+  if (session.provider_token) {
+    // Spotify tokens last 1 hour. We don't know exactly when this one was
+    // issued, so assume 30 minutes remaining — conservative but safe.
+    primeTokenCache(user.id, session.provider_token, Date.now() + 30 * 60 * 1000);
+  }
 
   const body = await request.json().catch(() => ({}));
   const userPrompt: string    = body.prompt        ?? "";

@@ -1,5 +1,5 @@
 import { SPOTIFY_API_BASE } from "@/lib/constants";
-import { getValidSpotifyToken } from "./token";
+import { getValidSpotifyToken, invalidateTokenCache } from "./token";
 import { rateLimiter } from "./rate-limiter";
 import type {
   SpotifyTrack,
@@ -20,7 +20,8 @@ class SpotifyClient {
 
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    isRetry = false,
   ): Promise<T> {
     rateLimiter.acquire(); // sync — never blocks
     const token = await getValidSpotifyToken(this.userId);
@@ -34,6 +35,14 @@ class SpotifyClient {
       },
     });
 
+    if (response.status === 401 && !isRetry) {
+      // Cached token was rejected — evict it and retry once with a fresh DB fetch.
+      // This handles the case where session.provider_token was primed into the
+      // cache but had already expired by the time we used it.
+      invalidateTokenCache(this.userId);
+      return this.request<T>(endpoint, options, true);
+    }
+
     if (response.status === 429) {
       const retryAfter = parseInt(
         response.headers.get("Retry-After") || "5",
@@ -42,7 +51,7 @@ class SpotifyClient {
       await new Promise((resolve) =>
         setTimeout(resolve, retryAfter * 1000)
       );
-      return this.request<T>(endpoint, options);
+      return this.request<T>(endpoint, options, isRetry);
     }
 
     if (!response.ok) {

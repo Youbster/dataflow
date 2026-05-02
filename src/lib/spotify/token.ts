@@ -54,6 +54,33 @@ export function decrypt(encryptedText: string): string {
   return decrypted;
 }
 
+/**
+ * Seed the in-process cache with a known-good token.
+ * Called from the API route with session.provider_token (Spotify token stored
+ * in the Supabase session cookie right after OAuth). This lets the first
+ * Spotify call in a request skip the Supabase DB query entirely.
+ */
+export function primeTokenCache(
+  userId: string,
+  token: string,
+  expiresAtMs: number,
+): void {
+  // Only prime if the token has at least 90 seconds of life left
+  if (expiresAtMs > Date.now() + 90_000) {
+    TOKEN_CACHE.set(userId, { token, expiresAt: expiresAtMs });
+  }
+}
+
+/**
+ * Evict a user's token from the cache.
+ * Called by SpotifyClient when Spotify returns 401 so the next call
+ * fetches a fresh token from DB.
+ */
+export function invalidateTokenCache(userId: string): void {
+  TOKEN_CACHE.delete(userId);
+  TOKEN_INFLIGHT.delete(userId);
+}
+
 export async function getValidSpotifyToken(userId: string): Promise<string> {
   // 1. Check resolved cache — valid for 4 minutes (token lifetime is ~1 hour)
   const cached = TOKEN_CACHE.get(userId);
@@ -70,13 +97,22 @@ export async function getValidSpotifyToken(userId: string): Promise<string> {
     try {
       const supabase = createAdminClient();
 
-      const { data: prefs } = await supabase
+      // Wrap the DB query with an 8-second timeout.
+      // Without this, a slow/paused Supabase free-tier project hangs the
+      // entire serverless function for 30 s (the Vercel function timeout).
+      const queryPromise = supabase
         .from("user_preferences")
         .select(
           "spotify_access_token_encrypted, spotify_refresh_token_encrypted, token_expires_at"
         )
         .eq("user_id", userId)
         .single();
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Supabase token fetch timed out (8 s)")), 8_000)
+      );
+
+      const { data: prefs } = await Promise.race([queryPromise, timeoutPromise]);
 
       if (!prefs?.spotify_refresh_token_encrypted) {
         throw new Error("No Spotify refresh token found for user");
