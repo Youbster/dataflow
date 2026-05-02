@@ -22,7 +22,7 @@ class SpotifyClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
-    await rateLimiter.acquire();
+    rateLimiter.acquire(); // sync — never blocks
     const token = await getValidSpotifyToken(this.userId);
 
     const response = await fetch(`${SPOTIFY_API_BASE}${endpoint}`, {
