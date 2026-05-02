@@ -162,8 +162,8 @@ export async function POST(request: NextRequest) {
       shortArtistsData,
       recentlyPlayedData,
     ] = await Promise.all([
-      spotify.getTopTracks("short_term", 20).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
-      spotify.getTopTracks("long_term",  20).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
+      spotify.getTopTracks("short_term", 50).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
+      spotify.getTopTracks("long_term",  50).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
       spotify.getTopArtists("short_term", 10).catch(() => ({ items: [] as SpotifyArtist[], total: 0, limit: 0, offset: 0, next: null })),
       spotify.getRecentlyPlayed(50).catch(() => ({ items: [], next: null, cursors: null })),
     ]);
@@ -342,31 +342,104 @@ Return ONLY valid JSON:
       return buildResponse(tracks.slice(0, targetCount), freshResult.intro, userPrompt, user.id);
     }
 
-    // ── CURATOR MODE — algorithmic selection, no AI call ─────────────────────
+    // ── CURATOR MODE — AI-selected tracks from your library ──────────────────
     //
-    // All data comes from Spotify directly (top tracks + recently played).
-    // No DB queries, no AI call → expected latency ~300-600 ms.
+    // Previous approach: always picked the top-ranked tracks regardless of
+    // mood → the same 3 anchor tracks appeared in every playlist.
+    //
+    // New approach: build a pool of up to 40 candidates from your library,
+    // let gpt-4o-mini pick which ones best fit the mood/vibe. Falls back to
+    // the rank-order algorithm if the AI call fails.
+    // Added latency: ~400 ms (gpt-4o-mini returning just indices).
 
     const anchorTarget    = shortCandidates.length > 0 ? counts.anchor : 0;
     const grooveTarget    = longCandidates.length > 0
       ? Math.min(counts.groove, longCandidates.length) : 0;
     const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
-
-    // Anchor: top-ranked recent tracks (already sorted by Spotify's ranking)
-    const anchorRows = shortCandidates.slice(0, anchorTarget);
-
-    // Groove: shuffle all-time favourites so the playlist feels fresh each time
-    const shuffledLong = [...longCandidates].sort(() => Math.random() - 0.5);
-    const grooveRows   = shuffledLong.slice(0, grooveTarget);
+    const needed          = anchorTarget + grooveTarget;
 
     // Build known-artist set for discovery filtering
     const knownArtistNorms = new Set(
       topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
     );
 
-    // Resolve anchor + groove synchronously (all data already in memory),
-    // kick off discovery search in parallel
-    const [discoveryTracks] = await Promise.all([
+    // Deduplicated pool: recent tracks first (they become anchors), then
+    // all-time favourites. Cap at 40 so the AI prompt stays small.
+    const seenIds = new Set<string>();
+    const pool: Array<{ track: SpotifyTrack; era: "recent" | "classic" }> = [];
+    for (const t of shortCandidates) {
+      if (pool.length >= 20) break;
+      if (!seenIds.has(t.id)) { seenIds.add(t.id); pool.push({ track: t, era: "recent" }); }
+    }
+    for (const t of longCandidates) {
+      if (pool.length >= 40) break;
+      if (!seenIds.has(t.id)) { seenIds.add(t.id); pool.push({ track: t, era: "classic" }); }
+    }
+
+    let anchorRows: SpotifyTrack[] = [];
+    let grooveRows: SpotifyTrack[] = [];
+
+    if (pool.length > 0 && needed > 0) {
+      // ── AI selection — ask which tracks fit the mood best ──────────────────
+      let aiIndices: number[] | null = null;
+
+      try {
+        const trackList = pool
+          .map((p, i) => `${i}: "${p.track.name}" – ${p.track.artists[0]?.name ?? "Unknown"}`)
+          .join("\n");
+
+        const selAI = await openai.chat.completions.create({
+          model: FAST_MODEL,
+          max_tokens: 160,
+          messages: [
+            {
+              role: "system",
+              content: "You are a DJ. Given a numbered track list, return ONLY a JSON array of indices.",
+            },
+            {
+              role: "user",
+              content:
+                `Pick the ${needed} tracks from the list below that best fit this vibe: "${requestStr}"${intensityStr}${constraintsStr}\n\n` +
+                `${trackList}\n\nReturn ONLY a JSON array like [0, 4, 7, …] — no explanation.`,
+            },
+          ],
+        });
+
+        const raw   = selAI.choices[0].message.content ?? "";
+        const match = raw.match(/\[[^\]]+\]/)?.[0];
+        if (match) {
+          const parsed = JSON.parse(match) as unknown[];
+          aiIndices = parsed
+            .filter((v): v is number => typeof v === "number" && v >= 0 && v < pool.length)
+            .slice(0, needed);
+        }
+      } catch {
+        // AI failed — fall through to algorithmic fallback below
+      }
+
+      if (aiIndices && aiIndices.length >= Math.min(needed, 3)) {
+        // Use AI-selected tracks. Preserve era distinction: first anchorTarget
+        // items become anchors, remainder become groove. Sort AI picks to put
+        // recent-era entries first so anchors skew toward what you've been playing.
+        const sorted = [...aiIndices].sort((a, b) => {
+          const eraA = pool[a].era === "recent" ? 0 : 1;
+          const eraB = pool[b].era === "recent" ? 0 : 1;
+          return eraA - eraB;
+        });
+        anchorRows = sorted.slice(0, anchorTarget).map((i) => pool[i].track);
+        grooveRows = sorted.slice(anchorTarget, needed).map((i) => pool[i].track);
+      } else {
+        // Algorithmic fallback: shuffle both pools for variety
+        const shuffledShort = [...shortCandidates].sort(() => Math.random() - 0.5);
+        const shuffledLong  = [...longCandidates].sort(() => Math.random() - 0.5);
+        anchorRows = shuffledShort.slice(0, anchorTarget);
+        grooveRows = shuffledLong.slice(0, grooveTarget);
+      }
+    }
+
+    // Discovery: Spotify keyword search for tracks that match the vibe
+    // but aren't from artists the user already knows well.
+    const discoveryTracks = await (
       discoveryTarget > 0
         ? spotify.searchTracks(requestStr, 20).then((r) => {
             const out: PlaylistTrack[] = [];
@@ -388,18 +461,17 @@ Return ONLY valid JSON:
             }
             return out;
           }).catch(() => [] as PlaylistTrack[])
-        : Promise.resolve([] as PlaylistTrack[]),
-    ]);
+        : Promise.resolve([] as PlaylistTrack[])
+    );
 
-    const anchorTracks    = anchorRows.map((t) => resolveSpotifyTrack(t, "anchor", "One of your most-played recent tracks"));
-    const grooveTracks    = grooveRows.map((t)  => resolveSpotifyTrack(t, "groove", "A favourite from your all-time listens"));
-    const allTracks       = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
+    const anchorTracks = anchorRows.map((t) => resolveSpotifyTrack(t, "anchor", "Picked for your vibe"));
+    const grooveTracks = grooveRows.map((t) => resolveSpotifyTrack(t, "groove", "Fits perfectly with your mood"));
+    const allTracks    = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
 
-    // Simple intro — no AI needed
     const moodLabel = requestStr.length < 60 ? `"${requestStr}"` : "your current vibe";
     const intro = familiarity === "familiar"
-      ? `Your comfort playlist — the tracks you know and love, ready to play.`
-      : `Built for ${moodLabel}: your recent favourites set the tone, your all-time listens carry the journey${discoveryTracks.length > 0 ? ", and a few fresh finds to keep it interesting" : ""}.`;
+      ? `Your comfort playlist — the tracks that fit ${moodLabel}, ready to play.`
+      : `Built for ${moodLabel}: tracks from your library that match the vibe${discoveryTracks.length > 0 ? ", plus a few fresh finds" : ""}.`;
 
     return buildResponse(allTracks, intro, userPrompt, user.id);
   } catch (err) {
