@@ -34,6 +34,31 @@ export async function POST(request: Request) {
     const token = await getValidSpotifyToken(session.user.id);
     const { playlistId, name, description, trackUris } = await request.json();
 
+    // ── Pre-flight scope check — avoids creating an empty playlist we can't fill ──
+    // getValidSpotifyToken may have just refreshed and stored fresh scopes, so query now.
+    const admin = createAdminClient();
+    const { data: prefs } = await admin
+      .from("user_preferences")
+      .select("spotify_scopes")
+      .eq("user_id", session.user.id)
+      .single();
+
+    if (prefs?.spotify_scopes) {
+      const granted = prefs.spotify_scopes.split(" ");
+      const canWrite =
+        granted.includes("playlist-modify-public") ||
+        granted.includes("playlist-modify-private");
+      if (!canWrite) {
+        return NextResponse.json(
+          {
+            error: "Spotify playlist access not granted. Reconnect your Spotify account to fix this.",
+            code: "scope_missing",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     // Use /me/playlists — simpler and avoids user ID mismatch issues
     const playlist = await spotifyFetch("/me/playlists", token, {
       method: "POST",
@@ -57,7 +82,6 @@ export async function POST(request: Request) {
       throw trackErr;
     }
 
-    const admin = createAdminClient();
     if (playlistId) {
       await admin
         .from("generated_playlists")

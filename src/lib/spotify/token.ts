@@ -88,6 +88,11 @@ export async function getValidSpotifyToken(userId: string): Promise<string> {
     );
   }
 
+  // Store the granted scopes so routes can pre-flight check before touching Spotify
+  if (tokenResponse.scope) {
+    updateData.spotify_scopes = tokenResponse.scope;
+  }
+
   await supabase
     .from("user_preferences")
     .update(updateData)

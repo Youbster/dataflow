@@ -58,7 +58,7 @@ export async function GET(request: Request) {
   // Log granted scopes (visible in Vercel function logs)
   console.log("[reconnect] Granted scopes:", scope);
 
-  // Store fresh tokens — this overwrites whatever was there before
+  // Store fresh tokens AND the granted scope list — this overwrites whatever was there before
   const admin = createAdminClient();
   await admin.from("user_preferences").upsert(
     {
@@ -66,6 +66,7 @@ export async function GET(request: Request) {
       spotify_access_token_encrypted:   encrypt(access_token),
       spotify_refresh_token_encrypted:  encrypt(refresh_token),
       token_expires_at:                 new Date(Date.now() + expires_in * 1000).toISOString(),
+      spotify_scopes:                   scope,
       updated_at:                       new Date().toISOString(),
     },
     { onConflict: "user_id" }
