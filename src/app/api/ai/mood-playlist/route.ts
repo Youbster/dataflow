@@ -270,11 +270,15 @@ Return ONLY valid JSON:
         discovery: { name: string; reason: string }[];
       };
 
+      // Use the user's Spotify market if known (stored during OAuth callback),
+      // falling back to US. This ensures non-US artists have top tracks available.
+      const userMarket: string = (user.user_metadata?.country as string | undefined) ?? "US";
+
       let tracks = await resolveDiscoveryArtists(
         freshResult.discovery ?? [],
         recentSet,
         spotify,
-        "US",
+        userMarket,
       );
 
       // Fallback: direct Spotify keyword search when artist resolution
@@ -282,13 +286,15 @@ Return ONLY valid JSON:
       if (tracks.length < targetCount) {
         try {
           const knownArtistNorms = new Set(
-            topArtists.toLowerCase().split(", ").map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
+            topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
           );
           const searchResult = await spotify.searchTracks(requestStr, 20);
+
+          // First pass: prefer artists the user doesn't already know
           for (const track of searchResult.tracks.items) {
             if (tracks.length >= targetCount) break;
-            const artistName  = track.artists[0]?.name ?? "";
-            const artistNorm  = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
+            const artistName = track.artists[0]?.name ?? "";
+            const artistNorm = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
             if (knownArtistNorms.has(artistNorm)) continue;
             if (recentSet.has(`${track.name}|||${artistName}`)) continue;
             if (tracks.some((t) => t.spotifyTrackId === track.id)) continue;
@@ -301,6 +307,27 @@ Return ONLY valid JSON:
               spotifyUri:     `spotify:track:${track.id}`,
               albumImageUrl:  track.album.images[0]?.url ?? null,
             });
+          }
+
+          // Second pass (last resort): if the genre is dominated by the user's
+          // own top artists (common for niche tastes like Arabic pop, Afrobeats,
+          // K-pop), relax the known-artist filter so we always return something.
+          if (tracks.length === 0) {
+            for (const track of searchResult.tracks.items) {
+              if (tracks.length >= targetCount) break;
+              const artistName = track.artists[0]?.name ?? "";
+              if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+              if (tracks.some((t) => t.spotifyTrackId === track.id)) continue;
+              tracks.push({
+                trackName:      track.name,
+                artistName,
+                section:        "discovery",
+                reason:         `Top result for "${requestStr}"`,
+                spotifyTrackId: track.id,
+                spotifyUri:     `spotify:track:${track.id}`,
+                albumImageUrl:  track.album.images[0]?.url ?? null,
+              });
+            }
           }
         } catch { /* best effort */ }
       }
@@ -334,7 +361,7 @@ Return ONLY valid JSON:
 
     // Build known-artist set for discovery filtering
     const knownArtistNorms = new Set(
-      topArtists.toLowerCase().split(", ").map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
+      topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
     );
 
     // Resolve anchor + groove synchronously (all data already in memory),

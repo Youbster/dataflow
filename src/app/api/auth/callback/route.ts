@@ -49,6 +49,14 @@ export async function GET(request: Request) {
 
       const admin = createAdminClient();
 
+      // Store country in Supabase user_metadata so API routes can use
+      // the correct Spotify market without an extra DB query.
+      if (spotifyProfile.country) {
+        await admin.auth.admin.updateUserById(session.user.id, {
+          user_metadata: { country: spotifyProfile.country },
+        });
+      }
+
       await admin.from("user_profiles").upsert(
         {
           id: session.user.id,
