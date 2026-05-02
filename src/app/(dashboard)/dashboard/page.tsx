@@ -182,8 +182,7 @@ export default function DashboardPage() {
   const [promptText, setPromptText]   = useState("");
   const [selectedMood, setSelectedMood]       = useState<string | null>(null);
   const [selectedContext, setSelectedContext] = useState<string | null>(null);
-  const [seedTrack, setSeedTrack]     = useState<RecentTrack | null>(null);
-  const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
+const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
   const [feedbackMode, setFeedbackMode] = useState(false);
   const [savedToSpotify, setSavedToSpotify] = useState(false);
@@ -265,7 +264,7 @@ export default function DashboardPage() {
     return parts.join(" — ");
   }
 
-  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null || seedTrack !== null;
+  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null;
 
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
@@ -279,7 +278,7 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: buildPrompt(),
-          seedTrack: seedTrack ? { trackName: seedTrack.trackName, artistName: seedTrack.artistName } : null,
+          seedTrack: null,
           sessionMinutes: sessionMins,
           familiarity: vibe,
           intensity,
@@ -304,7 +303,6 @@ export default function DashboardPage() {
     setPromptText("");
     setSelectedMood(null);
     setSelectedContext(null);
-    setSeedTrack(null);
     setPlaylist(null);
     setFeedbackMode(false);
     setSavedToSpotify(false);
@@ -322,7 +320,6 @@ export default function DashboardPage() {
       const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const label = generatedDiscovery
         ? `Discoveries — ${dateLabel}`
-        : seedTrack ? `Built around "${seedTrack.trackName}"`
         : buildPrompt().slice(0, 40) || "My Playlist";
       const res = await fetch("/api/spotify/playlists", {
         method: "POST",
@@ -356,8 +353,6 @@ export default function DashboardPage() {
   // Label shown in result header
   const resultLabel = generatedDiscovery
     ? null
-    : seedTrack
-    ? `Based on ${seedTrack.trackName}`
     : buildPrompt().slice(0, 50) || null;
 
   return (
@@ -417,7 +412,7 @@ export default function DashboardPage() {
               <textarea
                 ref={textareaRef}
                 value={promptText}
-                onChange={(e) => { setPromptText(e.target.value); if (e.target.value) setSeedTrack(null); }}
+                onChange={(e) => setPromptText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
                 placeholder={selectedMood
                   ? `${selectedMood}${selectedContext ? ` for ${selectedContext}` : ""} — add more detail or just build it`
@@ -432,7 +427,7 @@ export default function DashboardPage() {
                   {smartSuggestions.map((s) => (
                     <button
                       key={s}
-                      onClick={() => { setPromptText(s); setSeedTrack(null); }}
+                      onClick={() => setPromptText(s)}
                       className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                         promptText === s
                           ? "border-primary/50 bg-primary/10 text-primary"
@@ -482,7 +477,6 @@ export default function DashboardPage() {
                       key={chip.label}
                       onClick={() => {
                         setSelectedContext(selectedContext === chip.label ? null : chip.label);
-                        if (selectedContext !== chip.label) setSeedTrack(null);
                       }}
                       className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
                         selectedContext === chip.label
@@ -498,41 +492,6 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {/* ── Seed from recent tracks ─────────────────────────────────── */}
-            {!homeLoading && (homeData?.recentTopTracks.length ?? 0) > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-px bg-border/40" />
-                  <p className="text-[10px] font-semibold text-muted-foreground/40 uppercase tracking-widest shrink-0">or start from a track</p>
-                  <div className="flex-1 h-px bg-border/40" />
-                </div>
-                <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 scrollbar-none">
-                  {homeData!.recentTopTracks.slice(0, 5).map((t) => {
-                    const isSelected = seedTrack?.spotifyTrackId === t.spotifyTrackId;
-                    return (
-                      <button
-                        key={t.spotifyTrackId}
-                        onClick={() => { setSeedTrack(isSelected ? null : t); if (!isSelected) { setPromptText(""); setSelectedMood(null); setSelectedContext(null); } }}
-                        className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border shrink-0 transition-all ${isSelected ? "border-primary bg-primary/10" : "border-border bg-accent/40 hover:border-border/80 hover:bg-accent/60"}`}
-                      >
-                        {t.albumImageUrl && <img src={t.albumImageUrl} alt={t.trackName} className="w-7 h-7 rounded object-cover shrink-0" />}
-                        <div className="text-left">
-                          <p className="text-xs font-medium truncate max-w-[90px] leading-snug">{t.trackName}</p>
-                          <p className="text-[10px] text-muted-foreground truncate max-w-[90px]">{t.artistName}</p>
-                        </div>
-                        {isSelected && <Check className="w-3 h-3 text-primary shrink-0" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {homeLoading && (
-              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-11 w-32 rounded-xl shrink-0" />)}
-              </div>
-            )}
 
             {/* ── 4. Fine-tune ────────────────────────────────────────────── */}
             <div className="space-y-3 pt-1">
@@ -676,10 +635,7 @@ export default function DashboardPage() {
                           &ldquo;{resultLabel.length > 50 ? resultLabel.slice(0, 50) + "…" : resultLabel}&rdquo;
                         </span>
                       )}
-                      {seedTrack?.albumImageUrl && !generatedDiscovery && (
-                        <img src={seedTrack.albumImageUrl} className="w-4 h-4 rounded shrink-0 object-cover" alt="" />
-                      )}
-                      <span className="text-muted-foreground/30 text-[10px] shrink-0">·</span>
+<span className="text-muted-foreground/30 text-[10px] shrink-0">·</span>
                       <span className="text-[10px] text-muted-foreground shrink-0">{sessionMins === 20 ? "20 min" : sessionMins === 60 ? "1 hr" : "2 hr+"}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
