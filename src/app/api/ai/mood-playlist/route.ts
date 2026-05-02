@@ -57,6 +57,7 @@ async function resolveDiscoveryArtists(
   artists: { name: string; reason: string }[],
   recentSet: Set<string>,
   spotify: ReturnType<typeof createSpotifyClient>,
+  market = "US",
 ): Promise<PlaylistTrack[]> {
   // Resolve all artists in parallel: search + top-tracks
   const resolved = await Promise.allSettled(
@@ -64,7 +65,7 @@ async function resolveDiscoveryArtists(
       const artist = await spotify.searchArtist(name);
       if (!artist) return null;
 
-      const topTracks = await spotify.getArtistTopTracks(artist.id);
+      const topTracks = await spotify.getArtistTopTracks(artist.id, market);
       if (topTracks.length === 0) return null;
 
       // Prefer tracks the user hasn't heard recently; fall back to most popular
@@ -159,6 +160,7 @@ export async function POST(request: NextRequest) {
       { data: longTracksRaw },
       { data: history3d },
       { data: history7d },
+      { data: profileData },
     ] = await Promise.all([
       admin.from("user_top_tracks")
         .select("track_name, artist_names, spotify_track_id, album_image_url")
@@ -175,7 +177,13 @@ export async function POST(request: NextRequest) {
       admin.from("user_listening_history")
         .select("track_name, artist_names")
         .eq("user_id", user.id).gte("played_at", sevenDaysAgo),
+      admin.from("user_profiles")
+        .select("country")
+        .eq("id", user.id).maybeSingle(),
     ]);
+
+    // User's Spotify market (country code) — used for artist top-tracks lookup
+    const userMarket: string = (profileData as { country?: string } | null)?.country ?? "US";
 
     // ── Build blocklist + recent set ──────────────────────────────────────────
     const playCounts3d: Record<string, { count: number; lateNightOnly: boolean }> = {};
@@ -275,11 +283,64 @@ Return ONLY valid JSON:
         discovery: { name: string; reason: string }[];
       };
 
-      const tracks = await resolveDiscoveryArtists(
+      let tracks = await resolveDiscoveryArtists(
         freshResult.discovery ?? [],
         recentSet,
         spotify,
+        userMarket,
       );
+
+      // Fallback: if artist resolution came up short (market issues, obscure artists),
+      // ask AI for specific track names and verify each directly on Spotify
+      if (tracks.length < Math.ceil(targetCount * 0.5)) {
+        const fallbackPrompt = `The Spotify artist lookup failed to find enough tracks.
+Name ${targetCount} specific SONGS (track + artist) matching: "${requestStr}"
+These must be tracks that definitely exist on Spotify with exact titles.
+Exclude artists: ${topArtists || "none"}
+
+Return ONLY valid JSON:
+{
+  "tracks": [{ "trackName": "exact title", "artistName": "exact artist", "reason": "one sentence" }]
+}`;
+        try {
+          const fbRes = await openai.chat.completions.create({
+            model: FAST_MODEL, max_tokens: 700,
+            messages: [
+              { role: "system", content: MUSIC_EXPERT_SYSTEM },
+              { role: "user", content: fallbackPrompt },
+            ],
+          });
+          const fbText  = fbRes.choices[0].message.content ?? "";
+          const fbMatch = fbText.match(/\{[\s\S]*\}/)?.[0];
+          if (fbMatch) {
+            const fbResult = JSON.parse(fbMatch) as { tracks: { trackName: string; artistName: string; reason: string }[] };
+            const fbVerified = await Promise.allSettled(
+              fbResult.tracks.map(async (t) => {
+                const found = await spotify.findTrack(t.trackName, t.artistName);
+                if (!found) return null;
+                return {
+                  trackName: t.trackName, artistName: t.artistName,
+                  section: "discovery" as const, reason: t.reason,
+                  spotifyTrackId: found.id, spotifyUri: `spotify:track:${found.id}`,
+                  albumImageUrl: found.album.images[0]?.url ?? null,
+                };
+              })
+            );
+            const fallbackTracks: PlaylistTrack[] = [];
+            for (const r of fbVerified) {
+              if (r.status === "fulfilled" && r.value) fallbackTracks.push(r.value);
+            }
+            tracks = [...tracks, ...fallbackTracks];
+          }
+        } catch { /* fallback is best-effort */ }
+      }
+
+      if (tracks.length === 0) {
+        return NextResponse.json(
+          { error: "Couldn't find matching tracks on Spotify for this request. Try rephrasing or picking a different mood." },
+          { status: 422 }
+        );
+      }
 
       return buildResponse(
         tracks.slice(0, targetCount),
@@ -372,7 +433,7 @@ Return ONLY valid JSON:
       ),
       // Discovery: resolve via Spotify artist search → top tracks
       discoveryAsk > 0
-        ? resolveDiscoveryArtists(aiResult.discovery ?? [], recentSet, spotify)
+        ? resolveDiscoveryArtists(aiResult.discovery ?? [], recentSet, spotify, userMarket)
         : Promise.resolve([] as PlaylistTrack[]),
     ]);
 

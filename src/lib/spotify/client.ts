@@ -106,16 +106,23 @@ class SpotifyClient {
     }
   }
 
-  /** Get an artist's top tracks (sorted by Spotify popularity). */
-  async getArtistTopTracks(artistId: string): Promise<SpotifyTrack[]> {
-    try {
-      const result = await this.request<{ tracks: SpotifyTrack[] }>(
-        `/artists/${artistId}/top-tracks?market=US`
-      );
-      return result.tracks ?? [];
-    } catch {
-      return [];
-    }
+  /** Get an artist's top tracks. Tries the supplied market first, falls back to US. */
+  async getArtistTopTracks(artistId: string, market = "US"): Promise<SpotifyTrack[]> {
+    const tryMarket = async (m: string) => {
+      try {
+        const result = await this.request<{ tracks: SpotifyTrack[] }>(
+          `/artists/${artistId}/top-tracks?market=${m}`
+        );
+        return result.tracks ?? [];
+      } catch {
+        return [] as SpotifyTrack[];
+      }
+    };
+
+    const tracks = await tryMarket(market);
+    // If the primary market returned nothing, fall back to US
+    if (tracks.length === 0 && market !== "US") return tryMarket("US");
+    return tracks;
   }
 
   /**
