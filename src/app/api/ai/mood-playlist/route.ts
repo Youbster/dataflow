@@ -28,9 +28,10 @@ interface DbTrack {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function trackCount(sessionMinutes: number) {
+  // ~3.5 min/track average
   if (sessionMinutes <= 20) return { total: 6,  anchor: 2, groove: 2, discovery: 2 };
-  if (sessionMinutes <= 60) return { total: 10, anchor: 2, groove: 5, discovery: 3 };
-  return                           { total: 14, anchor: 3, groove: 7, discovery: 4 };
+  if (sessionMinutes <= 60) return { total: 18, anchor: 3, groove: 11, discovery: 4 };
+  return                           { total: 30, anchor: 4, groove: 18, discovery: 8 };
 }
 
 function detectNonEnglishLanguages(genres: string[]): string[] {
@@ -164,13 +165,13 @@ export async function POST(request: NextRequest) {
     ] = await Promise.all([
       admin.from("user_top_tracks")
         .select("track_name, artist_names, spotify_track_id, album_image_url")
-        .eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(20),
+        .eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(30),
       admin.from("user_top_artists")
         .select("artist_name, genres")
         .eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(15),
       admin.from("user_top_tracks")
         .select("track_name, artist_names, spotify_track_id, album_image_url")
-        .eq("user_id", user.id).eq("time_range", "long_term").order("rank").limit(30),
+        .eq("user_id", user.id).eq("time_range", "long_term").order("rank").limit(50),
       admin.from("user_listening_history")
         .select("track_name, artist_names, played_at")
         .eq("user_id", user.id).gte("played_at", threeDaysAgo),
@@ -267,7 +268,7 @@ Return ONLY valid JSON:
 }`;
 
       const freshAI = await openai.chat.completions.create({
-        model: FAST_MODEL, max_tokens: 900,
+        model: FAST_MODEL, max_tokens: 1800,
         messages: [
           { role: "system", content: MUSIC_EXPERT_SYSTEM },
           { role: "user",   content: freshPrompt },
@@ -397,7 +398,7 @@ Return ONLY valid JSON:
 }`;
 
     const aiRes = await openai.chat.completions.create({
-      model: FAST_MODEL, max_tokens: 1400,
+      model: FAST_MODEL, max_tokens: 3000,
       messages: [
         { role: "system", content: MUSIC_EXPERT_SYSTEM },
         { role: "user",   content: curatorPrompt },
