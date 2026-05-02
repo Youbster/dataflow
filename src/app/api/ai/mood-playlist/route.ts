@@ -281,14 +281,27 @@ Return ONLY valid JSON:
         userMarket,
       );
 
+      console.log(`[fresh-discovery] AI suggested ${(freshResult.discovery ?? []).length} artists, resolved ${tracks.length} tracks`);
+
       // Fallback: direct Spotify keyword search when artist resolution
       // didn't fill the list. Much faster for niche genres (afro house, etc.).
+      //
+      // IMPORTANT: use a Spotify-appropriate query, not the full natural-language
+      // requestStr. Spotify matches against track/artist/album names — a phrase
+      // like "Discover great music matching my taste" returns 0 results.
+      // Strategy: first few words of the user's prompt > top genre > safe default.
+      const spotifyQuery = userPrompt.trim()
+        ? userPrompt.trim().split(/\s+/).slice(0, 5).join(" ")
+        : genreStr.split(",")[0]?.trim() || "popular music";
+
       if (tracks.length < targetCount) {
         try {
           const knownArtistNorms = new Set(
             topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
           );
-          const searchResult = await spotify.searchTracks(requestStr, 20);
+          const searchResult = await spotify.searchTracks(spotifyQuery, 20);
+
+          console.log(`[fresh-discovery] fallback search "${spotifyQuery}" → ${searchResult.tracks.items.length} results`);
 
           // First pass: prefer artists the user doesn't already know
           for (const track of searchResult.tracks.items) {
@@ -302,7 +315,7 @@ Return ONLY valid JSON:
               trackName:      track.name,
               artistName,
               section:        "discovery",
-              reason:         `Fresh ${requestStr} track`,
+              reason:         `Fresh ${spotifyQuery} track`,
               spotifyTrackId: track.id,
               spotifyUri:     `spotify:track:${track.id}`,
               albumImageUrl:  track.album.images[0]?.url ?? null,
@@ -313,6 +326,7 @@ Return ONLY valid JSON:
           // own top artists (common for niche tastes like Arabic pop, Afrobeats,
           // K-pop), relax the known-artist filter so we always return something.
           if (tracks.length === 0) {
+            console.log("[fresh-discovery] first pass empty — running relaxed second pass");
             for (const track of searchResult.tracks.items) {
               if (tracks.length >= targetCount) break;
               const artistName = track.artists[0]?.name ?? "";
@@ -322,15 +336,19 @@ Return ONLY valid JSON:
                 trackName:      track.name,
                 artistName,
                 section:        "discovery",
-                reason:         `Top result for "${requestStr}"`,
+                reason:         `Top result for "${spotifyQuery}"`,
                 spotifyTrackId: track.id,
                 spotifyUri:     `spotify:track:${track.id}`,
                 albumImageUrl:  track.album.images[0]?.url ?? null,
               });
             }
           }
-        } catch { /* best effort */ }
+        } catch (err) {
+          console.error("[fresh-discovery] fallback search failed:", err);
+        }
       }
+
+      console.log(`[fresh-discovery] final track count: ${tracks.length} (target: ${targetCount})`);
 
       if (tracks.length === 0) {
         return NextResponse.json(
