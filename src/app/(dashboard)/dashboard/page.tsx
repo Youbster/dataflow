@@ -27,69 +27,29 @@ const GENRE_COLORS = [
   "bg-blue-500/15 text-blue-400 border-blue-500/25",
 ];
 
-// ─── Mood chips ───────────────────────────────────────────────────────────────
+// ─── Mood chips — emotional state (independent of activity) ─────────────────
 const MOOD_CHIPS = [
-  { emoji: "⚡", label: "Energized" },
-  { emoji: "🎯", label: "Focused"   },
-  { emoji: "🌊", label: "Chill"     },
-  { emoji: "✨", label: "Happy"     },
-  { emoji: "🌧️", label: "Moody"     },
-  { emoji: "🔥", label: "Confident" },
-  { emoji: "💫", label: "Romantic"  },
-  { emoji: "🕰️", label: "Nostalgic" },
+  { emoji: "⚡", label: "Energized",  desc: "high energy, upbeat, driving" },
+  { emoji: "🎯", label: "Focused",    desc: "deep concentration, flow state, minimal distraction" },
+  { emoji: "🌊", label: "Chill",      desc: "relaxed, laid-back, easy" },
+  { emoji: "✨", label: "Happy",      desc: "feel-good, joyful, uplifting" },
+  { emoji: "🌧️", label: "Moody",      desc: "introspective, emotional, atmospheric" },
+  { emoji: "🔥", label: "Confident",  desc: "powerful, bold, swagger" },
+  { emoji: "💫", label: "Romantic",   desc: "soft, intimate, tender" },
+  { emoji: "🌀", label: "Dreamy",     desc: "ethereal, hazy, floating" },
 ];
 
-// ─── Context chips — revealed progressively based on selected mood ────────────
-const CONTEXT_BY_MOOD: Record<string, { emoji: string; label: string; prompt: string }[]> = {
-  Energized: [
-    { emoji: "🏋️", label: "Workout",     prompt: "High energy workout, pump it up, no slow moments" },
-    { emoji: "🎉", label: "Party",       prompt: "Party energy, crowd pleasers, bangers only" },
-    { emoji: "🚗", label: "Drive",       prompt: "Fast lane, windows down, open road feeling" },
-    { emoji: "☕", label: "Morning",     prompt: "Morning boost, ease in then build energy" },
-  ],
-  Focused: [
-    { emoji: "💻", label: "Deep work",   prompt: "Deep focus, no distractions, flow state" },
-    { emoji: "📚", label: "Study",       prompt: "Studying, concentration, minimal lyrics" },
-    { emoji: "📖", label: "Reading",     prompt: "Reading ambiance, calm and unobtrusive" },
-    { emoji: "⌨️", label: "Coding",      prompt: "Coding session, rhythmic and focused, minimal lyrics" },
-  ],
-  Chill: [
-    { emoji: "🌙", label: "Wind down",   prompt: "Winding down for the night, calm and relaxing" },
-    { emoji: "🍳", label: "Cooking",     prompt: "Cooking at home, laid-back and easy" },
-    { emoji: "🌃", label: "Night walk",  prompt: "Late night walk, atmospheric and introspective" },
-    { emoji: "✈️", label: "Travel",      prompt: "Travelling, cinematic and wanderlust" },
-  ],
-  Happy: [
-    { emoji: "💃", label: "Dance",       prompt: "Feel-good danceable tracks, pure joy" },
-    { emoji: "🥂", label: "Brunch",      prompt: "Relaxed brunch vibes, good mood all the way" },
-    { emoji: "🗺️", label: "Road trip",   prompt: "Road trip with friends, sing-along energy" },
-    { emoji: "👥", label: "Friends",     prompt: "Hanging with friends, fun crowd-pleasing music" },
-  ],
-  Moody: [
-    { emoji: "🌑", label: "Late night",  prompt: "Late night introspective, deep and atmospheric" },
-    { emoji: "🌧️", label: "Rain",        prompt: "Rainy day vibes, melancholic and beautiful" },
-    { emoji: "🪞", label: "Solo",        prompt: "Alone with my thoughts, emotional and raw" },
-    { emoji: "✍️", label: "Journaling",  prompt: "Journaling session, reflective and quiet" },
-  ],
-  Confident: [
-    { emoji: "💪", label: "Workout",     prompt: "Power workout, aggressive energy, no mercy" },
-    { emoji: "👗", label: "Getting ready", prompt: "Getting ready to go out, hype and confident" },
-    { emoji: "🌆", label: "Night out",   prompt: "Night out, swagger and confidence" },
-    { emoji: "⚡", label: "Hustle",      prompt: "Hustle mode, driven and unstoppable" },
-  ],
-  Romantic: [
-    { emoji: "🕯️", label: "Date night",  prompt: "Romantic date night, soft and intimate" },
-    { emoji: "🌅", label: "Long drive",  prompt: "Long scenic drive, romantic and cinematic" },
-    { emoji: "🫕", label: "Cooking together", prompt: "Cooking together, warm and loving" },
-    { emoji: "🌙", label: "Night in",   prompt: "Cozy night in together, tender and close" },
-  ],
-  Nostalgic: [
-    { emoji: "📼", label: "Throwback",   prompt: "Throwback hits, pure nostalgia" },
-    { emoji: "☔", label: "Rainy day",   prompt: "Nostalgic rainy day, memories and feelings" },
-    { emoji: "🚙", label: "Long drive",  prompt: "Long drive down memory lane" },
-    { emoji: "🕯️", label: "Wind down",  prompt: "Nostalgic wind-down, soft and reflective" },
-  ],
-};
+// ─── Activity chips — what you're doing (independent of mood) ────────────────
+const ACTIVITY_CHIPS = [
+  { emoji: "🏋️", label: "Workout",    desc: "working out, pump it up, no slow moments" },
+  { emoji: "📚", label: "Study",      desc: "studying or deep work, concentration, minimal lyrics" },
+  { emoji: "🚗", label: "Drive",      desc: "driving, windows down, open road" },
+  { emoji: "🍳", label: "Cook",       desc: "cooking at home, relaxed and easy" },
+  { emoji: "🎉", label: "Party",      desc: "party energy, crowd pleasers, bangers" },
+  { emoji: "🌙", label: "Wind down",  desc: "winding down for the night, calm and relaxing" },
+  { emoji: "🚶", label: "Walk",       desc: "walking outside, reflective and easy" },
+  { emoji: "👥", label: "Hangout",    desc: "hanging with friends, fun and social" },
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Phase = "pick" | "loading" | "result";
@@ -180,8 +140,8 @@ export default function DashboardPage() {
   // generator — core
   const [phase, setPhase]             = useState<Phase>("pick");
   const [promptText, setPromptText]   = useState("");
-  const [selectedMood, setSelectedMood]       = useState<string | null>(null);
-  const [selectedContext, setSelectedContext] = useState<string | null>(null);
+  const [selectedMood, setSelectedMood]         = useState<string | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
 const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
   const [feedbackMode, setFeedbackMode] = useState(false);
@@ -246,25 +206,23 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     return out.slice(0, 2);
   }, [homeData]);
 
-  // Context chips for the selected mood
-  const contextChips = selectedMood ? (CONTEXT_BY_MOOD[selectedMood] ?? []) : [];
-
   // Build the combined prompt sent to Claude
   function buildPrompt(): string {
     const parts: string[] = [];
     if (promptText.trim()) parts.push(promptText.trim());
-    if (selectedMood && selectedContext) {
-      // Combine mood label + the rich contextual description from the chip
-      const ctxChip = (CONTEXT_BY_MOOD[selectedMood] ?? []).find(c => c.label === selectedContext);
-      const desc = ctxChip?.prompt ?? `${selectedMood} mood for ${selectedContext}`;
-      parts.push(`${selectedMood} — ${desc}`);
-    } else if (selectedMood) {
-      parts.push(`${selectedMood} energy`);
+    const moodChip     = MOOD_CHIPS.find(c => c.label === selectedMood);
+    const activityChip = ACTIVITY_CHIPS.find(c => c.label === selectedActivity);
+    if (moodChip && activityChip) {
+      parts.push(`${moodChip.label} energy — ${activityChip.desc}`);
+    } else if (moodChip) {
+      parts.push(`${moodChip.label} — ${moodChip.desc}`);
+    } else if (activityChip) {
+      parts.push(activityChip.desc);
     }
     return parts.join(" — ");
   }
 
-  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null;
+  const canGenerate = vibe === "fresh" || promptText.trim().length > 0 || selectedMood !== null || selectedActivity !== null;
 
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
@@ -302,7 +260,7 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     setPhase("pick");
     setPromptText("");
     setSelectedMood(null);
-    setSelectedContext(null);
+    setSelectedActivity(null);
     setPlaylist(null);
     setFeedbackMode(false);
     setSavedToSpotify(false);
@@ -414,9 +372,12 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
                 value={promptText}
                 onChange={(e) => setPromptText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
-                placeholder={selectedMood
-                  ? `${selectedMood}${selectedContext ? ` for ${selectedContext}` : ""} — add more detail or just build it`
-                  : "Describe the vibe you want…"}
+                placeholder={
+                  selectedMood && selectedActivity ? `${selectedMood} + ${selectedActivity} — add more detail or just build it`
+                  : selectedMood   ? `${selectedMood} — add context or just build it`
+                  : selectedActivity ? `${selectedActivity} — add a mood or just build it`
+                  : "Describe the vibe, or pick below…"
+                }
                 rows={2}
                 className="w-full resize-none rounded-xl bg-accent/50 border border-border px-3.5 py-3 text-sm placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
               />
@@ -441,9 +402,9 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
               )}
             </div>
 
-            {/* ── 2. Mood grid ───────────────────────────────────────────── */}
+            {/* ── 2. Mood row ────────────────────────────────────────────── */}
             <div className="space-y-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Choose a mood</p>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">Mood</p>
               <div className="grid grid-cols-4 gap-1.5">
                 {MOOD_CHIPS.map((chip) => (
                   <MoodChip
@@ -451,46 +412,27 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
                     emoji={chip.emoji}
                     label={chip.label}
                     active={selectedMood === chip.label}
-                    onClick={() => {
-                      if (selectedMood === chip.label) {
-                        setSelectedMood(null);
-                        setSelectedContext(null);
-                      } else {
-                        setSelectedMood(chip.label);
-                        setSelectedContext(null);
-                      }
-                    }}
+                    onClick={() => setSelectedMood(selectedMood === chip.label ? null : chip.label)}
                   />
                 ))}
               </div>
             </div>
 
-            {/* ── 3. Context (progressive reveal) ────────────────────────── */}
-            {selectedMood && contextChips.length > 0 && (
-              <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
-                  Make it for…
-                </p>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {contextChips.map((chip) => (
-                    <button
-                      key={chip.label}
-                      onClick={() => {
-                        setSelectedContext(selectedContext === chip.label ? null : chip.label);
-                      }}
-                      className={`flex flex-col items-center gap-1 px-1 py-2.5 rounded-xl border text-xs font-medium transition-all ${
-                        selectedContext === chip.label
-                          ? "border-primary bg-primary/15 text-primary"
-                          : "border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80"
-                      }`}
-                    >
-                      <span className="text-base leading-none">{chip.emoji}</span>
-                      <span className="text-[10px] text-center leading-tight">{chip.label}</span>
-                    </button>
-                  ))}
-                </div>
+            {/* ── 3. Activity row ────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">For</p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {ACTIVITY_CHIPS.map((chip) => (
+                  <MoodChip
+                    key={chip.label}
+                    emoji={chip.emoji}
+                    label={chip.label}
+                    active={selectedActivity === chip.label}
+                    onClick={() => setSelectedActivity(selectedActivity === chip.label ? null : chip.label)}
+                  />
+                ))}
               </div>
-            )}
+            </div>
 
 
             {/* ── 4. Fine-tune ────────────────────────────────────────────── */}
