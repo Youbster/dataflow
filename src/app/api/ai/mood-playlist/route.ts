@@ -311,51 +311,40 @@ Return ONLY valid JSON (no markdown, no extra text):
       // Resolve all suggestions in parallel using findTrack (3 strategies + fuzzy matching)
       let tracks = await resolveDiscoveryTracks(aiTracks, recentSet, freshKnownNorms, spotify);
 
-      console.log(`[fresh-discovery] findTrack: ${tracks.length}/${aiTracks.length} resolved`);
+      console.log(`[fresh-discovery] findTrack resolved: ${tracks.length}/${aiTracks.length}`);
 
-      // Fallback: if AI suggestions didn't fill the list (rare after the 2× buffer),
-      // supplement with a genre-based Spotify keyword search.
-      // Build a REAL Spotify query — NOT natural language like "Discover great music"
-      // which returns 0 results. Spotify matches track/artist/album names only.
+      // ── Multi-tier fallback ───────────────────────────────────────────────────
+      // Each tier is independently caught so one failure doesn't block the rest.
+      // Spotify search matches track/artist/album NAME — not natural language.
+      // Build real keyword queries: user's words > top genre > safe defaults.
       if (tracks.length < targetCount) {
-        const fallbackQuery = userPrompt.trim()
-          ? userPrompt.trim().split(/\s+/).slice(0, 4).join(" ")
-          : genreStr.split(",")[0]?.trim() || allGenres[0] || "indie";
+        const existingIds = new Set(tracks.map((t) => t.spotifyTrackId));
 
-        console.log(`[fresh-discovery] need ${targetCount - tracks.length} more — fallback query: "${fallbackQuery}"`);
+        // Tier-1 queries: try user prompt words, then each of the top 3 genres
+        const promptWords = userPrompt.trim().split(/\s+/).slice(0, 4).join(" ").trim();
+        const tierQueries = [
+          promptWords,
+          ...allGenres.slice(0, 3).map((g) => g.replace(/-/g, " ").split(" ").slice(0, 2).join(" ").trim()),
+          "indie",     // broad reliable fallback
+          "alternative", // another broad fallback
+        ].filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i); // deduplicate, remove empty
 
-        try {
-          const searchResult = await spotify.searchTracks(fallbackQuery, 30);
-          const existingIds  = new Set(tracks.map((t) => t.spotifyTrackId));
+        for (const query of tierQueries) {
+          if (tracks.length >= targetCount) break;
 
-          // First pass: prefer unknown artists
-          for (const track of searchResult.tracks.items) {
-            if (tracks.length >= targetCount) break;
-            const artistName = track.artists[0]?.name ?? "";
-            const artistNorm = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
-            if (freshKnownNorms.size > 0 && freshKnownNorms.has(artistNorm)) continue;
-            if (recentSet.has(`${track.name}|||${artistName}`)) continue;
-            if (existingIds.has(track.id)) continue;
-            existingIds.add(track.id);
-            tracks.push({
-              trackName:      track.name,
-              artistName,
-              section:        "discovery",
-              reason:         `Matches "${fallbackQuery}"`,
-              spotifyTrackId: track.id,
-              spotifyUri:     `spotify:track:${track.id}`,
-              albumImageUrl:  track.album.images[0]?.url ?? null,
-            });
-          }
+          console.log(`[fresh-discovery] fallback tier — query: "${query}", need ${targetCount - tracks.length} more`);
 
-          // Second pass: relax known-artist filter — needed when the genre is
-          // dominated by the user's own top artists (e.g. Arabic pop, K-pop,
-          // Afrobeats) so we always return something rather than 0 tracks.
-          if (tracks.length < Math.ceil(targetCount * 0.5)) {
-            console.log("[fresh-discovery] relaxing known-artist filter (niche genre dominated by known artists)");
-            for (const track of searchResult.tracks.items) {
+          try {
+            const sr = await spotify.searchTracks(query, 30);
+            const items = sr.tracks?.items ?? [];
+            console.log(`[fresh-discovery] "${query}" → ${items.length} results`);
+
+            // Pass 1: skip known artists and recently played
+            for (const track of items) {
               if (tracks.length >= targetCount) break;
               const artistName = track.artists[0]?.name ?? "";
+              const artistNorm = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
+              if (freshKnownNorms.size > 0 && freshKnownNorms.has(artistNorm)) continue;
               if (recentSet.has(`${track.name}|||${artistName}`)) continue;
               if (existingIds.has(track.id)) continue;
               existingIds.add(track.id);
@@ -363,15 +352,36 @@ Return ONLY valid JSON (no markdown, no extra text):
                 trackName:      track.name,
                 artistName,
                 section:        "discovery",
-                reason:         `Top result for "${fallbackQuery}"`,
+                reason:         `Matches "${query}"`,
                 spotifyTrackId: track.id,
                 spotifyUri:     `spotify:track:${track.id}`,
                 albumImageUrl:  track.album.images[0]?.url ?? null,
               });
             }
+
+            // Pass 2: relax known-artist filter (handles niche genres where the
+            // user's top artists dominate the search results — Arabic pop, K-pop, etc.)
+            if (tracks.length < Math.ceil(targetCount * 0.4)) {
+              for (const track of items) {
+                if (tracks.length >= targetCount) break;
+                const artistName = track.artists[0]?.name ?? "";
+                if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+                if (existingIds.has(track.id)) continue;
+                existingIds.add(track.id);
+                tracks.push({
+                  trackName:      track.name,
+                  artistName,
+                  section:        "discovery",
+                  reason:         `Fresh find — "${query}"`,
+                  spotifyTrackId: track.id,
+                  spotifyUri:     `spotify:track:${track.id}`,
+                  albumImageUrl:  track.album.images[0]?.url ?? null,
+                });
+              }
+            }
+          } catch (err) {
+            console.error(`[fresh-discovery] fallback "${query}" error:`, err);
           }
-        } catch (err) {
-          console.error("[fresh-discovery] fallback search error:", err);
         }
       }
 
@@ -379,7 +389,15 @@ Return ONLY valid JSON (no markdown, no extra text):
 
       if (tracks.length === 0) {
         return NextResponse.json(
-          { error: "Couldn't find matching tracks on Spotify for this request. Try rephrasing or picking a different mood." },
+          {
+            error: "Couldn't find matching tracks on Spotify for this request. Try rephrasing or picking a different mood.",
+            debug: {
+              aiTracksCount: aiTracks.length,
+              topArtists: topArtists || "none",
+              genres: genreStr || "none",
+              userPrompt: userPrompt || "(empty)",
+            },
+          },
           { status: 422 }
         );
       }
