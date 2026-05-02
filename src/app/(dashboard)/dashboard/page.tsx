@@ -367,20 +367,27 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
 
             {/* ── 1. Prompt ──────────────────────────────────────────────── */}
             <div className="space-y-2">
-              <textarea
-                ref={textareaRef}
-                value={promptText}
-                onChange={(e) => setPromptText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
-                placeholder={
-                  selectedMood && selectedActivity ? `${selectedMood} + ${selectedActivity} — add more detail or just build it`
-                  : selectedMood   ? `${selectedMood} — add context or just build it`
-                  : selectedActivity ? `${selectedActivity} — add a mood or just build it`
-                  : "Describe the vibe, or pick below…"
-                }
-                rows={2}
-                className="w-full resize-none rounded-xl bg-accent/50 border border-border px-3.5 py-3 text-sm placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
-              />
+              {/* Gradient border wrapper */}
+              <div className="relative rounded-xl p-[1.5px] bg-gradient-to-br from-primary/50 via-primary/20 to-primary/5 shadow-[0_0_18px_rgba(29,185,84,0.12)]">
+                <div className="relative rounded-[10px] overflow-hidden">
+                  <textarea
+                    ref={textareaRef}
+                    value={promptText}
+                    onChange={(e) => setPromptText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && canGenerate) { e.preventDefault(); generate(); } }}
+                    placeholder={
+                      selectedMood && selectedActivity ? `${selectedMood} + ${selectedActivity} — add more detail or just build it`
+                      : selectedMood     ? `${selectedMood} — add an activity or just build it`
+                      : selectedActivity ? `${selectedActivity} — add a mood or just build it`
+                      : "What do you want to hear right now?"
+                    }
+                    rows={2}
+                    className="w-full resize-none bg-card px-3.5 py-3 text-sm placeholder:text-muted-foreground/45 focus:outline-none transition-all"
+                  />
+                  {/* Subtle sparkle hint */}
+                  <Sparkles className="absolute right-3 top-3 w-3.5 h-3.5 text-primary/30 pointer-events-none" />
+                </div>
+              </div>
 
               {/* Smart suggestion chips */}
               {!homeLoading && smartSuggestions.length > 0 && (
