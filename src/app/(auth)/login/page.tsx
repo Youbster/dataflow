@@ -4,10 +4,41 @@ import { createClient } from "@/lib/supabase/client";
 import { SPOTIFY_SCOPES } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Music, BarChart3, Sparkles, Users } from "lucide-react";
+import { Music, BarChart3, Sparkles, Users, AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
+  const searchParams = useSearchParams();
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Supabase sends OAuth errors in the URL hash (e.g. #error_description=…).
+    // The server never sees hash params, so we read them client-side.
+    const hash = window.location.hash;
+    if (hash) {
+      const params = new URLSearchParams(hash.slice(1));
+      const desc = params.get("error_description");
+      if (desc) {
+        setAuthError(decodeURIComponent(desc.replace(/\+/g, " ")));
+        // Clean the hash so refreshing doesn't re-show the error
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    }
+    // Also surface query-param errors (e.g. ?error=auth_failed)
+    const qErr = searchParams.get("error");
+    if (qErr && !authError) {
+      setAuthError(
+        qErr === "no_code"
+          ? "Login was cancelled or failed. Please try again."
+          : `Login error: ${qErr}`
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleSpotifyLogin() {
+    setAuthError(null);
     const supabase = createClient();
     await supabase.auth.signInWithOAuth({
       provider: "spotify",
@@ -39,6 +70,13 @@ export default function LoginPage() {
             <Feature icon={Music} text="Detect overplayed songs & find fresh music" />
             <Feature icon={Users} text="Compare tastes & share with friends" />
           </div>
+
+          {authError && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{authError}</span>
+            </div>
+          )}
 
           <Button
             onClick={handleSpotifyLogin}
