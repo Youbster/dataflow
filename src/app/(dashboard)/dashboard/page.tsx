@@ -253,10 +253,18 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     if (!canGenerate) return;
     setPhase("loading");
     setGeneratedDiscovery(vibe === "fresh");
+
+    // Abort the request if the server doesn't respond within 28 seconds.
+    // Without this, a Vercel timeout sends HTTP 200 headers then never
+    // completes the body — fetch() never rejects and the spinner hangs forever.
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 28_000);
+
     try {
       const res = await fetch("/api/ai/mood-playlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           prompt: buildPrompt(),
           seedTrack: null,
@@ -269,12 +277,28 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
           artistLock: artistLock.trim() || null,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setPlaylist(data);
+      clearTimeout(abortTimer);
+
+      // Guard against non-JSON responses (e.g. a Vercel 504 HTML page)
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`Server error (${res.status}) — please try again`);
+      }
+
+      if (!res.ok) throw new Error((data.error as string) || `Error ${res.status}`);
+      setPlaylist(data as unknown as GeneratedPlaylist);
       setPhase("result");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to generate playlist");
+      clearTimeout(abortTimer);
+      const msg =
+        err instanceof Error
+          ? err.name === "AbortError"
+            ? "Took too long — try a shorter duration or simpler request"
+            : err.message
+          : "Failed to generate playlist";
+      toast.error(msg);
       setPhase("pick");
     }
   }

@@ -6,6 +6,11 @@ import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import type { SpotifyTrack } from "@/types/spotify";
 
+// Give Vercel up to 30 seconds for this function (Pro plan).
+// Hobby plan is capped at 10s regardless; the client-side AbortController
+// handles the "never-resolves" case if the limit is hit.
+export const maxDuration = 30;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface PlaylistTrack {
