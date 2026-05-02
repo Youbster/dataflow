@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { openai, FAST_MODEL } from "@/lib/claude/client";
@@ -160,13 +160,13 @@ export async function POST(request: NextRequest) {
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // ── Fetch user data ───────────────────────────────────────────────────────
+    // ── Fetch user data (4 parallel queries instead of 6) ────────────────────
+    // Dropped: user_profiles (market defaults to US — saves 1 round-trip)
+    // Merged:  history3d + history7d → single 7-day query (saves 1 round-trip)
     const [
       { data: shortTracksRaw }, { data: shortArtists },
       { data: longTracksRaw },
-      { data: history3d },
       { data: history7d },
-      { data: profileData },
     ] = await Promise.all([
       admin.from("user_top_tracks")
         .select("track_name, artist_names, spotify_track_id, album_image_url")
@@ -179,40 +179,32 @@ export async function POST(request: NextRequest) {
         .eq("user_id", user.id).eq("time_range", "long_term").order("rank").limit(50),
       admin.from("user_listening_history")
         .select("track_name, artist_names, played_at")
-        .eq("user_id", user.id).gte("played_at", threeDaysAgo),
-      admin.from("user_listening_history")
-        .select("track_name, artist_names")
         .eq("user_id", user.id).gte("played_at", sevenDaysAgo),
-      admin.from("user_profiles")
-        .select("country")
-        .eq("id", user.id).maybeSingle(),
     ]);
 
-    // User's Spotify market (country code) — used for artist top-tracks lookup
-    const userMarket: string = (profileData as { country?: string } | null)?.country ?? "US";
+    // Default market — dropped the user_profiles query for speed
+    const userMarket = "US";
 
-    // ── Build blocklist + recent set ──────────────────────────────────────────
-    const playCounts3d: Record<string, { count: number; lateNightOnly: boolean }> = {};
-    for (const p of history3d ?? []) {
-      const hour = new Date(p.played_at).getHours();
+    // ── Build recent set + play counts (from single 7-day query) ─────────────
+    const playCounts7d: Record<string, number> = {};
+    for (const p of history7d ?? []) {
       const key = `${p.track_name}|||${p.artist_names?.[0]}`;
-      if (!playCounts3d[key]) playCounts3d[key] = { count: 0, lateNightOnly: true };
-      if (!(hour >= 23 || hour < 7)) playCounts3d[key].lateNightOnly = false;
-      playCounts3d[key].count++;
+      playCounts7d[key] = (playCounts7d[key] ?? 0) + 1;
     }
-    const recentSet = new Set((history7d ?? []).map(
-      (p) => `${p.track_name}|||${p.artist_names?.[0]}`
-    ));
+    const recentSet = new Set(Object.keys(playCounts7d));
 
-    // ── Filter candidates ─────────────────────────────────────────────────────
+    // ── Filter candidates — ONLY keep tracks with a stored Spotify ID ─────────
+    // This eliminates all findTrack() Spotify calls in resolveDbTrack, which
+    // were the last remaining source of slow parallel API calls.
     const shortCandidates = (shortTracksRaw as DbTrack[] ?? []).filter((t) => {
+      if (!t.spotify_track_id) return false;           // must have stored ID
       const key = `${t.track_name}|||${t.artist_names?.[0]}`;
-      const pc = playCounts3d[key];
-      return !pc || pc.count < 5 || pc.lateNightOnly;
+      return (playCounts7d[key] ?? 0) < 10;            // skip if over-played this week
     });
 
-    const longCandidates = (longTracksRaw as DbTrack[] ?? []).filter(
-      (t) => !recentSet.has(`${t.track_name}|||${t.artist_names?.[0]}`)
+    const longCandidates = (longTracksRaw as DbTrack[] ?? []).filter((t) =>
+      t.spotify_track_id &&                             // must have stored ID
+      !recentSet.has(`${t.track_name}|||${t.artist_names?.[0]}`)
     );
 
     // ── Taste profile ─────────────────────────────────────────────────────────
@@ -423,57 +415,65 @@ Return ONLY valid JSON:
   }
 }
 
-// ─── Persist + respond ────────────────────────────────────────────────────────
+// ─── Respond immediately, persist in background ───────────────────────────────
+//
+// after() runs AFTER the response is sent — the DB save never adds to
+// response latency. The client gets intro + tracks instantly; playlistId
+// is null on the first render (the Save-to-Spotify button still works fine
+// because the playlists endpoint creates its own record if needed).
 
-async function buildResponse(
+function buildResponse(
   tracks: PlaylistTrack[],
   intro: string,
   promptUsed: string,
   admin: ReturnType<typeof createAdminClient>,
   userId: string,
-) {
-  // Save to generated_playlists
-  let playlistId: string | null = null;
-  try {
-    const verifiedCount  = tracks.filter((t) => t.spotifyTrackId).length;
-    const coverImageUrl  = tracks.find((t) => t.albumImageUrl)?.albumImageUrl ?? null;
-    const nameLabel      = promptUsed.trim().slice(0, 40) || "Generated Playlist";
-    const dateLabel      = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+): NextResponse {
+  // Return to the client immediately
+  const response = NextResponse.json({ intro, tracks, playlistId: null });
 
-    const { data: pl } = await admin
-      .from("generated_playlists")
-      .insert({
-        user_id:         userId,
-        name:            `${nameLabel} — ${dateLabel}`,
-        description:     intro,
-        prompt_used:     promptUsed.trim(),
-        mood_tags:       [],
-        track_count:     verifiedCount,
-        cover_image_url: coverImageUrl,
-      })
-      .select("id")
-      .single();
+  // Persist to DB after response is sent (non-blocking)
+  after(async () => {
+    try {
+      const verifiedCount = tracks.filter((t) => t.spotifyTrackId).length;
+      const coverImageUrl = tracks.find((t) => t.albumImageUrl)?.albumImageUrl ?? null;
+      const nameLabel     = promptUsed.trim().slice(0, 40) || "Generated Playlist";
+      const dateLabel     = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-    if (pl?.id) {
-      playlistId = pl.id;
-      const trackRows = tracks
-        .filter((t) => t.spotifyTrackId)
-        .map((t, i) => ({
-          playlist_id:      pl.id,
-          spotify_track_id: t.spotifyTrackId!,
-          track_name:       t.trackName,
-          artist_names:     [t.artistName],
-          album_image_url:  t.albumImageUrl ?? null,
-          position:         i,
-          claude_note:      t.reason,
-        }));
-      if (trackRows.length > 0) {
-        await admin.from("playlist_tracks").insert(trackRows);
+      const { data: pl } = await admin
+        .from("generated_playlists")
+        .insert({
+          user_id:         userId,
+          name:            `${nameLabel} — ${dateLabel}`,
+          description:     intro,
+          prompt_used:     promptUsed.trim(),
+          mood_tags:       [],
+          track_count:     verifiedCount,
+          cover_image_url: coverImageUrl,
+        })
+        .select("id")
+        .single();
+
+      if (pl?.id) {
+        const trackRows = tracks
+          .filter((t) => t.spotifyTrackId)
+          .map((t, i) => ({
+            playlist_id:      pl.id,
+            spotify_track_id: t.spotifyTrackId!,
+            track_name:       t.trackName,
+            artist_names:     [t.artistName],
+            album_image_url:  t.albumImageUrl ?? null,
+            position:         i,
+            claude_note:      t.reason,
+          }));
+        if (trackRows.length > 0) {
+          await admin.from("playlist_tracks").insert(trackRows);
+        }
       }
+    } catch (dbErr) {
+      console.error("[mood-playlist] DB save failed:", dbErr);
     }
-  } catch (dbErr) {
-    console.error("[mood-playlist] DB save failed:", dbErr);
-  }
+  });
 
-  return NextResponse.json({ intro, tracks, playlistId });
+  return response;
 }
