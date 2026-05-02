@@ -241,9 +241,11 @@ export async function POST(request: NextRequest) {
     if (familiarity === "fresh" || !hasData) {
       const recentTracksStr = [...recentSet].slice(0, 20).map((k) => k.split("|||")[0]).join(", ");
 
-      // Ask for extra artists as buffer in case some fail Spotify resolution
+      // Ask for extra artists as buffer in case some fail Spotify resolution.
+      // Cap at 15 — asking for 29 niche-genre artists (e.g. "afro house") causes AI to
+      // hallucinate names, which then fail Spotify lookup and produce 0 results.
       const targetCount = familiarity === "fresh" ? counts.total : counts.discovery;
-      const askFor      = Math.ceil(targetCount * 1.6);
+      const askFor      = Math.min(Math.ceil(targetCount * 1.6), 15);
 
       const freshPrompt = `You are curating a discovery playlist for a music lover.
 
@@ -334,6 +336,37 @@ Return ONLY valid JSON:
             tracks = [...tracks, ...fallbackTracks];
           }
         } catch { /* fallback is best-effort */ }
+      }
+
+      // Last resort: direct Spotify keyword search — works great for genre requests
+      // like "afro house", "cumbia", "drill", etc. where the AI can't reliably name
+      // enough obscure artists but a search query returns real verified tracks instantly.
+      if (tracks.length < targetCount) {
+        try {
+          const knownArtistNorms = new Set(
+            topArtists.toLowerCase().split(", ").map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
+          );
+          const searchResult = await spotify.searchTracks(requestStr, 20);
+          for (const track of searchResult.tracks.items) {
+            if (tracks.length >= targetCount) break;
+            const artistName  = track.artists[0]?.name ?? "";
+            const artistNorm  = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
+            // Skip known artists and recently-played tracks
+            if (knownArtistNorms.has(artistNorm)) continue;
+            if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+            // Skip duplicates already in our list
+            if (tracks.some((t) => t.spotifyTrackId === track.id)) continue;
+            tracks.push({
+              trackName:      track.name,
+              artistName,
+              section:        "discovery",
+              reason:         `Fresh ${requestStr} track`,
+              spotifyTrackId: track.id,
+              spotifyUri:     `spotify:track:${track.id}`,
+              albumImageUrl:  track.album.images[0]?.url ?? null,
+            });
+          }
+        } catch { /* best effort — we may already have partial results */ }
       }
 
       if (tracks.length === 0) {
