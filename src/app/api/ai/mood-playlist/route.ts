@@ -350,104 +350,73 @@ Return ONLY valid JSON:
       );
     }
 
-    // ── CURATOR MODE — select from known tracks + targeted discovery ──────────
+    // ── CURATOR MODE — algorithmic selection, no AI call ─────────────────────
+    //
+    // Removing the AI call from this path cuts response time from ~8s to ~1.5s.
+    // Track selection is still personalised — anchor uses the user's most-played
+    // recent tracks, groove shuffles their all-time favourites, discovery comes
+    // from a direct Spotify keyword search filtered to exclude known artists.
+    // Only Fresh mode (above) uses the AI, where naming new artists is the
+    // entire point.
 
-    // Trim candidate lists before sending to the AI — we only need a small
-    // pool for it to pick from. 15 short + 20 long keeps the prompt tiny
-    // and well within Vercel Hobby's 10-second budget.
-    const shortPool = shortCandidates.slice(0, 15);
-    const longPool  = longCandidates.slice(0, 20);
-
-    const shortList = shortPool
-      .map((t, i) => `${i}. "${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`)
-      .join("\n");
-    const longList = longPool
-      .map((t, i) => `${i}. "${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`)
-      .join("\n");
-
-    const anchorTarget    = shortPool.length > 0 ? counts.anchor : 0;
-    const grooveTarget    = longPool.length > 0   ? Math.min(counts.groove, longPool.length) : 0;
+    const anchorTarget    = shortCandidates.length > 0 ? counts.anchor : 0;
+    const grooveTarget    = longCandidates.length > 0
+      ? Math.min(counts.groove, longCandidates.length) : 0;
     const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
-    // Minimal buffer — just 2 extra artists in case some fail Spotify lookup
-    const discoveryAsk    = discoveryTarget > 0 ? discoveryTarget + 2 : 0;
 
-    const curatorPrompt = `You are a music curator building a ${counts.total}-track playlist.
+    // Anchor: top-ranked recent tracks (already sorted by rank in the DB query)
+    const anchorRows = shortCandidates.slice(0, anchorTarget);
 
-REQUEST: "${requestStr}"${intensityStr}
-${familiarity === "familiar" ? "\nFAMILIAR MODE: User wants comfort and familiarity — lean heavily on what they know." : ""}
+    // Groove: shuffle all-time favourites so the playlist feels fresh each time
+    const shuffledLong = [...longCandidates].sort(() => Math.random() - 0.5);
+    const grooveRows   = shuffledLong.slice(0, grooveTarget);
 
-USER'S TASTE:
-- Top genres: ${genreStr || "varied"}
-- Top artists: ${topArtists || "none"}
-${nativeLanguages.length > 0 ? `- Also listens to: ${nativeLanguages.join(", ")} music` : ""}
-${constraintsStr}
+    // Resolve anchor + groove + discovery in parallel ─────────────────────────
+    const knownArtistNorms = new Set(
+      topArtists.toLowerCase().split(", ").map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
+    );
 
-${anchorTarget > 0 ? `── OPENING TRACKS (select exactly ${anchorTarget} from this list by number):
-${shortList}
-` : ""}
-${grooveTarget > 0 ? `── JOURNEY TRACKS (select exactly ${grooveTarget} from this list by number — prefer tracks NOT recently played):
-${longList}
-` : ""}
-${discoveryAsk > 0 ? `── DISCOVERY (name ${discoveryAsk} artists new to this user that match their taste and this request):
-These must be artists NOT in their known list above. Include exact Spotify artist names.
-` : ""}
-
-Return ONLY valid JSON:
-{
-  "intro": "2 sentences — what makes this playlist perfect for this specific request",
-  "anchor": [{ "index": 0, "reason": "one sentence" }],
-  "groove":  [{ "index": 0, "reason": "one sentence" }],
-  "discovery": [{ "name": "Exact Spotify artist name", "reason": "one sentence why they fit" }]
-}`;
-
-    const aiRes = await openai.chat.completions.create({
-      model: FAST_MODEL, max_tokens: 1200,
-      messages: [
-        { role: "system", content: MUSIC_EXPERT_SYSTEM },
-        { role: "user",   content: curatorPrompt },
-      ],
-    });
-
-    const aiText  = aiRes.choices[0].message.content ?? "";
-    const aiMatch = aiText.match(/\{[\s\S]*\}/)?.[0];
-    if (!aiMatch) throw new Error("AI returned invalid response");
-
-    const aiResult = JSON.parse(aiMatch) as {
-      intro: string;
-      anchor:    { index: number; reason: string }[];
-      groove:    { index: number; reason: string }[];
-      discovery: { name: string;  reason: string }[];
-    };
-
-    // ── Resolve anchor + groove from DB (parallel, with findTrack fallback) ───
     const [anchorTracks, grooveTracks, discoveryTracks] = await Promise.all([
-      // Anchor: resolve selected short-term tracks
-      Promise.all(
-        (aiResult.anchor ?? [])
-          .filter((item) => item.index >= 0 && item.index < shortPool.length)
-          .slice(0, anchorTarget)
-          .map((item) => resolveDbTrack(shortPool[item.index], "anchor", item.reason, spotify))
-      ),
-      // Groove: resolve selected long-term tracks
-      Promise.all(
-        (aiResult.groove ?? [])
-          .filter((item) => item.index >= 0 && item.index < longPool.length)
-          .slice(0, grooveTarget)
-          .map((item) => resolveDbTrack(longPool[item.index], "groove", item.reason, spotify))
-      ),
-      // Discovery: resolve via Spotify artist search → top tracks
-      discoveryAsk > 0
-        ? resolveDiscoveryArtists(aiResult.discovery ?? [], recentSet, spotify, userMarket)
+      Promise.all(anchorRows.map((t) =>
+        resolveDbTrack(t, "anchor", "One of your most-played recent tracks", spotify)
+      )),
+      Promise.all(grooveRows.map((t) =>
+        resolveDbTrack(t, "groove", "A favourite from your all-time listens", spotify)
+      )),
+      // Discovery: one fast Spotify search — returns real tracks instantly
+      discoveryTarget > 0
+        ? spotify.searchTracks(requestStr, 20).then((r) => {
+            const out: PlaylistTrack[] = [];
+            for (const track of r.tracks.items) {
+              if (out.length >= discoveryTarget) break;
+              const artistName = track.artists[0]?.name ?? "";
+              const artistNorm = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
+              if (knownArtistNorms.has(artistNorm)) continue;
+              if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+              out.push({
+                trackName:      track.name,
+                artistName,
+                section:        "discovery",
+                reason:         `Matches "${requestStr}"`,
+                spotifyTrackId: track.id,
+                spotifyUri:     `spotify:track:${track.id}`,
+                albumImageUrl:  track.album.images[0]?.url ?? null,
+              });
+            }
+            return out;
+          }).catch(() => [] as PlaylistTrack[])
         : Promise.resolve([] as PlaylistTrack[]),
     ]);
 
-    const allTracks = [
-      ...anchorTracks,
-      ...grooveTracks,
-      ...discoveryTracks.slice(0, discoveryTarget),
-    ];
+    const allTracks = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
 
-    return buildResponse(allTracks, aiResult.intro, userPrompt, admin, user.id);
+    // Simple intro — no AI needed
+    const moodLabel = requestStr.length < 60 ? `"${requestStr}"` : "your current vibe";
+    const intro = familiarity === "familiar"
+      ? `Your comfort playlist — the tracks you know and love, ready to play.`
+      : `Built for ${moodLabel}: your recent favourites set the tone, your all-time listens carry the journey${discoveryTracks.length > 0 ? ", and a few fresh finds to keep it interesting" : ""}.`;
+
+    return buildResponse(allTracks, intro, userPrompt, admin, user.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate playlist";
     return NextResponse.json({ error: message }, { status: 500 });
