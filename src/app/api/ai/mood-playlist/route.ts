@@ -279,7 +279,7 @@ Return ONLY valid JSON:
 }`;
 
       const freshAI = await openai.chat.completions.create({
-        model: FAST_MODEL, max_tokens: 1800,
+        model: FAST_MODEL, max_tokens: 600,
         messages: [
           { role: "system", content: MUSIC_EXPERT_SYSTEM },
           { role: "user",   content: freshPrompt },
@@ -352,19 +352,24 @@ Return ONLY valid JSON:
 
     // ── CURATOR MODE — select from known tracks + targeted discovery ──────────
 
-    // Numbered candidate lists for AI to index into
-    const shortList = shortCandidates
+    // Trim candidate lists before sending to the AI — we only need a small
+    // pool for it to pick from. 15 short + 20 long keeps the prompt tiny
+    // and well within Vercel Hobby's 10-second budget.
+    const shortPool = shortCandidates.slice(0, 15);
+    const longPool  = longCandidates.slice(0, 20);
+
+    const shortList = shortPool
       .map((t, i) => `${i}. "${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`)
       .join("\n");
-    const longList = longCandidates
+    const longList = longPool
       .map((t, i) => `${i}. "${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`)
       .join("\n");
 
-    const anchorTarget    = shortCandidates.length > 0 ? counts.anchor : 0;
-    const grooveTarget    = longCandidates.length > 0  ? Math.min(counts.groove, longCandidates.length) : 0;
-    const discoveryTarget = familiarity === "familiar"  ? 0 : counts.discovery;
-    // Ask for extra discovery artists as buffer
-    const discoveryAsk    = discoveryTarget > 0 ? Math.ceil(discoveryTarget * 1.5) : 0;
+    const anchorTarget    = shortPool.length > 0 ? counts.anchor : 0;
+    const grooveTarget    = longPool.length > 0   ? Math.min(counts.groove, longPool.length) : 0;
+    const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
+    // Minimal buffer — just 2 extra artists in case some fail Spotify lookup
+    const discoveryAsk    = discoveryTarget > 0 ? discoveryTarget + 2 : 0;
 
     const curatorPrompt = `You are a music curator building a ${counts.total}-track playlist.
 
@@ -396,7 +401,7 @@ Return ONLY valid JSON:
 }`;
 
     const aiRes = await openai.chat.completions.create({
-      model: FAST_MODEL, max_tokens: 3000,
+      model: FAST_MODEL, max_tokens: 1200,
       messages: [
         { role: "system", content: MUSIC_EXPERT_SYSTEM },
         { role: "user",   content: curatorPrompt },
@@ -419,16 +424,16 @@ Return ONLY valid JSON:
       // Anchor: resolve selected short-term tracks
       Promise.all(
         (aiResult.anchor ?? [])
-          .filter((item) => item.index >= 0 && item.index < shortCandidates.length)
+          .filter((item) => item.index >= 0 && item.index < shortPool.length)
           .slice(0, anchorTarget)
-          .map((item) => resolveDbTrack(shortCandidates[item.index], "anchor", item.reason, spotify))
+          .map((item) => resolveDbTrack(shortPool[item.index], "anchor", item.reason, spotify))
       ),
       // Groove: resolve selected long-term tracks
       Promise.all(
         (aiResult.groove ?? [])
-          .filter((item) => item.index >= 0 && item.index < longCandidates.length)
+          .filter((item) => item.index >= 0 && item.index < longPool.length)
           .slice(0, grooveTarget)
-          .map((item) => resolveDbTrack(longCandidates[item.index], "groove", item.reason, spotify))
+          .map((item) => resolveDbTrack(longPool[item.index], "groove", item.reason, spotify))
       ),
       // Discovery: resolve via Spotify artist search → top tracks
       discoveryAsk > 0
