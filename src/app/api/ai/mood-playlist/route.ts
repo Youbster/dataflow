@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { openai, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
-import type { SpotifyTrack } from "@/types/spotify";
+import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
 
 // Give Vercel up to 30 seconds for this function (Pro plan).
 // Hobby plan is capped at 10s regardless; the client-side AbortController
@@ -21,13 +21,6 @@ interface PlaylistTrack {
   spotifyTrackId: string | null;
   spotifyUri: string | null;
   albumImageUrl: string | null;
-}
-
-interface DbTrack {
-  track_name: string;
-  artist_names: string[] | null;
-  spotify_track_id: string | null;
-  album_image_url: string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -53,6 +46,23 @@ function detectNonEnglishLanguages(genres: string[]): string[] {
   return detected;
 }
 
+/** Maps a SpotifyTrack directly to a PlaylistTrack — no extra API calls needed. */
+function resolveSpotifyTrack(
+  t: SpotifyTrack,
+  section: "anchor" | "groove",
+  reason: string,
+): PlaylistTrack {
+  return {
+    trackName:      t.name,
+    artistName:     t.artists[0]?.name ?? "Unknown",
+    section,
+    reason,
+    spotifyTrackId: t.id,
+    spotifyUri:     t.uri,
+    albumImageUrl:  t.album.images[0]?.url ?? null,
+  };
+}
+
 /**
  * Resolves discovery artists to real Spotify tracks.
  * For each artist: search Spotify → get their top tracks → pick the best
@@ -65,7 +75,6 @@ async function resolveDiscoveryArtists(
   spotify: ReturnType<typeof createSpotifyClient>,
   market = "US",
 ): Promise<PlaylistTrack[]> {
-  // Resolve all artists in parallel: search + top-tracks
   const resolved = await Promise.allSettled(
     artists.map(async ({ name, reason }) => {
       const artist = await spotify.searchArtist(name);
@@ -74,20 +83,19 @@ async function resolveDiscoveryArtists(
       const topTracks = await spotify.getArtistTopTracks(artist.id, market);
       if (topTracks.length === 0) return null;
 
-      // Prefer tracks the user hasn't heard recently; fall back to most popular
       const fresh = topTracks.filter(
-        (t) => !recentSet.has(`${t.name}|||${t.artists[0]?.name}`)
+        (t) => !recentSet.has(`${t.name}|||${t.artists[0]?.name ?? ""}`)
       );
       const pick: SpotifyTrack = (fresh.length > 0 ? fresh : topTracks)[0];
 
       return {
-        trackName: pick.name,
-        artistName: pick.artists[0]?.name ?? artist.name,
-        section: "discovery" as const,
+        trackName:      pick.name,
+        artistName:     pick.artists[0]?.name ?? artist.name,
+        section:        "discovery" as const,
         reason,
         spotifyTrackId: pick.id,
-        spotifyUri: `spotify:track:${pick.id}`,
-        albumImageUrl: pick.album.images[0]?.url ?? null,
+        spotifyUri:     `spotify:track:${pick.id}`,
+        albumImageUrl:  pick.album.images[0]?.url ?? null,
       };
     })
   );
@@ -99,45 +107,15 @@ async function resolveDiscoveryArtists(
   return tracks;
 }
 
-/**
- * Converts a DB track row into a PlaylistTrack.
- * If the track has no stored Spotify ID, falls back to findTrack().
- */
-async function resolveDbTrack(
-  t: DbTrack,
-  section: "anchor" | "groove",
-  reason: string,
-  spotify: ReturnType<typeof createSpotifyClient>,
-): Promise<PlaylistTrack> {
-  let trackId = t.spotify_track_id ?? null;
-  let albumImg = t.album_image_url ?? null;
-
-  // Fallback search if ID missing from DB
-  if (!trackId) {
-    const found = await spotify.findTrack(t.track_name, t.artist_names?.[0] ?? "");
-    if (found) {
-      trackId = found.id;
-      albumImg = found.album.images[0]?.url ?? null;
-    }
-  }
-
-  return {
-    trackName: t.track_name,
-    artistName: t.artist_names?.[0] ?? "Unknown",
-    section,
-    reason,
-    spotifyTrackId: trackId,
-    spotifyUri: trackId ? `spotify:track:${trackId}` : null,
-    albumImageUrl: albumImg,
-  };
-}
-
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  // getSession() decodes the JWT from the cookie locally — zero HTTP round-trips.
+  // (getUser() would make an HTTP call to Supabase auth server every request.)
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = session.user;
 
   const body = await request.json().catch(() => ({}));
   const userPrompt: string    = body.prompt        ?? "";
@@ -153,64 +131,57 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Provide a description or pick a mood" }, { status: 400 });
   }
 
-  const counts = trackCount(sessionMinutes);
+  const counts  = trackCount(sessionMinutes);
+  const spotify = createSpotifyClient(user.id);
 
   try {
-    const admin = createAdminClient();
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-
-    // ── Fetch user data (4 parallel queries instead of 6) ────────────────────
-    // Dropped: user_profiles (market defaults to US — saves 1 round-trip)
-    // Merged:  history3d + history7d → single 7-day query (saves 1 round-trip)
+    // ── Fetch user data — direct Spotify calls, no Supabase data queries ──────
+    //
+    // Previously: 4 Supabase admin queries → cold-start Supabase free tier could
+    // hang for 20-30s before returning.
+    // Now: 4 parallel Spotify API calls — token is cached in-process (token.ts),
+    // so only 1 DB hit happens (first call), subsequent calls use the cache.
+    // Total expected latency: ~300-600 ms vs 5-30 s.
     const [
-      { data: shortTracksRaw }, { data: shortArtists },
-      { data: longTracksRaw },
-      { data: history7d },
+      shortTracksData,
+      longTracksData,
+      shortArtistsData,
+      recentlyPlayedData,
     ] = await Promise.all([
-      admin.from("user_top_tracks")
-        .select("track_name, artist_names, spotify_track_id, album_image_url")
-        .eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(30),
-      admin.from("user_top_artists")
-        .select("artist_name, genres")
-        .eq("user_id", user.id).eq("time_range", "short_term").order("rank").limit(15),
-      admin.from("user_top_tracks")
-        .select("track_name, artist_names, spotify_track_id, album_image_url")
-        .eq("user_id", user.id).eq("time_range", "long_term").order("rank").limit(50),
-      admin.from("user_listening_history")
-        .select("track_name, artist_names, played_at")
-        .eq("user_id", user.id).gte("played_at", sevenDaysAgo),
+      spotify.getTopTracks("short_term", 20).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
+      spotify.getTopTracks("long_term",  20).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
+      spotify.getTopArtists("short_term", 10).catch(() => ({ items: [] as SpotifyArtist[], total: 0, limit: 0, offset: 0, next: null })),
+      spotify.getRecentlyPlayed(50).catch(() => ({ items: [], next: null, cursors: null })),
     ]);
 
-    // Default market — dropped the user_profiles query for speed
-    const userMarket = "US";
-
-    // ── Build recent set + play counts (from single 7-day query) ─────────────
+    // ── Build recent set + play counts from recently-played ───────────────────
     const playCounts7d: Record<string, number> = {};
-    for (const p of history7d ?? []) {
-      const key = `${p.track_name}|||${p.artist_names?.[0]}`;
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (const p of recentlyPlayedData.items ?? []) {
+      // Spotify only returns ~50 recent plays — filter to the last 7 days
+      if (new Date(p.played_at).getTime() < sevenDaysAgo) continue;
+      const key = `${p.track.name}|||${p.track.artists[0]?.name ?? ""}`;
       playCounts7d[key] = (playCounts7d[key] ?? 0) + 1;
     }
     const recentSet = new Set(Object.keys(playCounts7d));
 
-    // ── Filter candidates — ONLY keep tracks with a stored Spotify ID ─────────
-    // This eliminates all findTrack() Spotify calls in resolveDbTrack, which
-    // were the last remaining source of slow parallel API calls.
-    const shortCandidates = (shortTracksRaw as DbTrack[] ?? []).filter((t) => {
-      if (!t.spotify_track_id) return false;           // must have stored ID
-      const key = `${t.track_name}|||${t.artist_names?.[0]}`;
-      return (playCounts7d[key] ?? 0) < 10;            // skip if over-played this week
+    // ── Build candidate pools directly from Spotify data ─────────────────────
+    // SpotifyTrack always has an id — no need to filter for missing IDs.
+    const shortCandidates = (shortTracksData.items ?? []).filter((t) => {
+      const key = `${t.name}|||${t.artists[0]?.name ?? ""}`;
+      return (playCounts7d[key] ?? 0) < 10; // skip if over-played this week
     });
 
-    const longCandidates = (longTracksRaw as DbTrack[] ?? []).filter((t) =>
-      t.spotify_track_id &&                             // must have stored ID
-      !recentSet.has(`${t.track_name}|||${t.artist_names?.[0]}`)
-    );
+    const longCandidates = (longTracksData.items ?? []).filter((t) => {
+      const key = `${t.name}|||${t.artists[0]?.name ?? ""}`;
+      return !recentSet.has(key);
+    });
 
     // ── Taste profile ─────────────────────────────────────────────────────────
-    const topArtists = (shortArtists ?? []).slice(0, 8).map((a) => a.artist_name).join(", ");
-    const allGenres  = [...new Set((shortArtists ?? []).flatMap((a) => a.genres ?? []))];
-    const genreStr   = allGenres.slice(0, 6).join(", ");
+    const shortArtists  = shortArtistsData.items ?? [];
+    const topArtists    = shortArtists.slice(0, 8).map((a) => a.name).join(", ");
+    const allGenres     = [...new Set(shortArtists.flatMap((a) => a.genres ?? []))];
+    const genreStr      = allGenres.slice(0, 6).join(", ");
     const nativeLanguages = detectNonEnglishLanguages(allGenres);
 
     // ── Shared constraint strings ─────────────────────────────────────────────
@@ -234,7 +205,6 @@ export async function POST(request: NextRequest) {
       : "";
 
     const requestStr = userPrompt.trim() || "Discover great music matching my taste";
-    const spotify    = createSpotifyClient(user.id);
     const hasData    = shortCandidates.length > 0 || longCandidates.length > 0;
 
     // ── FRESH / DISCOVERY MODE — all new artists ──────────────────────────────
@@ -244,7 +214,6 @@ export async function POST(request: NextRequest) {
       // Ask for artists as buffer in case some fail Spotify resolution.
       // Hard cap at 10: each artist = 2 Spotify calls (search + top-tracks).
       // 10 artists × 2 calls = 20 calls → stays well under Vercel's function timeout.
-      // More artists doesn't help for niche genres — the AI starts hallucinating names.
       const targetCount = familiarity === "fresh" ? counts.total : counts.discovery;
       const askFor      = Math.min(Math.ceil(targetCount * 1.5), 10);
 
@@ -291,13 +260,11 @@ Return ONLY valid JSON:
         freshResult.discovery ?? [],
         recentSet,
         spotify,
-        userMarket,
+        "US",
       );
 
-      // Fallback: direct Spotify keyword search — runs whenever artist resolution
-      // didn't fill the list. Much faster and more reliable than asking the AI for
-      // specific track names (which it hallucinates for niche genres like "afro house").
-      // One search call returns 20 real, verified tracks in ~200 ms.
+      // Fallback: direct Spotify keyword search when artist resolution
+      // didn't fill the list. Much faster for niche genres (afro house, etc.).
       if (tracks.length < targetCount) {
         try {
           const knownArtistNorms = new Set(
@@ -308,10 +275,8 @@ Return ONLY valid JSON:
             if (tracks.length >= targetCount) break;
             const artistName  = track.artists[0]?.name ?? "";
             const artistNorm  = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
-            // Skip known artists and recently-played tracks
             if (knownArtistNorms.has(artistNorm)) continue;
             if (recentSet.has(`${track.name}|||${artistName}`)) continue;
-            // Skip duplicates already in our list
             if (tracks.some((t) => t.spotifyTrackId === track.id)) continue;
             tracks.push({
               trackName:      track.name,
@@ -323,7 +288,7 @@ Return ONLY valid JSON:
               albumImageUrl:  track.album.images[0]?.url ?? null,
             });
           }
-        } catch { /* best effort — we may already have partial results */ }
+        } catch { /* best effort */ }
       }
 
       if (tracks.length === 0) {
@@ -333,49 +298,34 @@ Return ONLY valid JSON:
         );
       }
 
-      return buildResponse(
-        tracks.slice(0, targetCount),
-        freshResult.intro,
-        userPrompt,
-        admin,
-        user.id,
-      );
+      return buildResponse(tracks.slice(0, targetCount), freshResult.intro, userPrompt, user.id);
     }
 
     // ── CURATOR MODE — algorithmic selection, no AI call ─────────────────────
     //
-    // Removing the AI call from this path cuts response time from ~8s to ~1.5s.
-    // Track selection is still personalised — anchor uses the user's most-played
-    // recent tracks, groove shuffles their all-time favourites, discovery comes
-    // from a direct Spotify keyword search filtered to exclude known artists.
-    // Only Fresh mode (above) uses the AI, where naming new artists is the
-    // entire point.
+    // All data comes from Spotify directly (top tracks + recently played).
+    // No DB queries, no AI call → expected latency ~300-600 ms.
 
     const anchorTarget    = shortCandidates.length > 0 ? counts.anchor : 0;
     const grooveTarget    = longCandidates.length > 0
       ? Math.min(counts.groove, longCandidates.length) : 0;
     const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
 
-    // Anchor: top-ranked recent tracks (already sorted by rank in the DB query)
+    // Anchor: top-ranked recent tracks (already sorted by Spotify's ranking)
     const anchorRows = shortCandidates.slice(0, anchorTarget);
 
     // Groove: shuffle all-time favourites so the playlist feels fresh each time
     const shuffledLong = [...longCandidates].sort(() => Math.random() - 0.5);
     const grooveRows   = shuffledLong.slice(0, grooveTarget);
 
-    // Resolve anchor + groove + discovery in parallel ─────────────────────────
+    // Build known-artist set for discovery filtering
     const knownArtistNorms = new Set(
       topArtists.toLowerCase().split(", ").map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
     );
 
-    const [anchorTracks, grooveTracks, discoveryTracks] = await Promise.all([
-      Promise.all(anchorRows.map((t) =>
-        resolveDbTrack(t, "anchor", "One of your most-played recent tracks", spotify)
-      )),
-      Promise.all(grooveRows.map((t) =>
-        resolveDbTrack(t, "groove", "A favourite from your all-time listens", spotify)
-      )),
-      // Discovery: one fast Spotify search — returns real tracks instantly
+    // Resolve anchor + groove synchronously (all data already in memory),
+    // kick off discovery search in parallel
+    const [discoveryTracks] = await Promise.all([
       discoveryTarget > 0
         ? spotify.searchTracks(requestStr, 20).then((r) => {
             const out: PlaylistTrack[] = [];
@@ -400,7 +350,9 @@ Return ONLY valid JSON:
         : Promise.resolve([] as PlaylistTrack[]),
     ]);
 
-    const allTracks = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
+    const anchorTracks    = anchorRows.map((t) => resolveSpotifyTrack(t, "anchor", "One of your most-played recent tracks"));
+    const grooveTracks    = grooveRows.map((t)  => resolveSpotifyTrack(t, "groove", "A favourite from your all-time listens"));
+    const allTracks       = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
 
     // Simple intro — no AI needed
     const moodLabel = requestStr.length < 60 ? `"${requestStr}"` : "your current vibe";
@@ -408,7 +360,7 @@ Return ONLY valid JSON:
       ? `Your comfort playlist — the tracks you know and love, ready to play.`
       : `Built for ${moodLabel}: your recent favourites set the tone, your all-time listens carry the journey${discoveryTracks.length > 0 ? ", and a few fresh finds to keep it interesting" : ""}.`;
 
-    return buildResponse(allTracks, intro, userPrompt, admin, user.id);
+    return buildResponse(allTracks, intro, userPrompt, user.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate playlist";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -426,15 +378,13 @@ function buildResponse(
   tracks: PlaylistTrack[],
   intro: string,
   promptUsed: string,
-  admin: ReturnType<typeof createAdminClient>,
   userId: string,
 ): NextResponse {
-  // Return to the client immediately
   const response = NextResponse.json({ intro, tracks, playlistId: null });
 
-  // Persist to DB after response is sent (non-blocking)
   after(async () => {
     try {
+      const admin = createAdminClient();
       const verifiedCount = tracks.filter((t) => t.spotifyTrackId).length;
       const coverImageUrl = tracks.find((t) => t.albumImageUrl)?.albumImageUrl ?? null;
       const nameLabel     = promptUsed.trim().slice(0, 40) || "Generated Playlist";
