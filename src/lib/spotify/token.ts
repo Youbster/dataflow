@@ -3,6 +3,19 @@ import { SPOTIFY_TOKEN_URL } from "@/lib/constants";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SpotifyTokenResponse } from "@/types/spotify";
 
+// ─── In-process token cache ───────────────────────────────────────────────────
+// Serverless function instances are short-lived but may handle several
+// concurrent requests. Without this, every Spotify API call triggers a
+// separate Supabase DB query — 20 parallel calls = 20 DB hits = 2-4s wasted.
+//
+// Two-layer defence:
+//   1. Resolved cache (TOKEN_CACHE): return immediately if token is valid.
+//   2. In-flight dedup (TOKEN_INFLIGHT): if a refresh is already in progress,
+//      wait for it instead of issuing a second DB query / token refresh.
+
+const TOKEN_CACHE = new Map<string, { token: string; expiresAt: number }>();
+const TOKEN_INFLIGHT = new Map<string, Promise<string>>();
+
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
@@ -42,63 +55,88 @@ export function decrypt(encryptedText: string): string {
 }
 
 export async function getValidSpotifyToken(userId: string): Promise<string> {
-  const supabase = createAdminClient();
-
-  const { data: prefs } = await supabase
-    .from("user_preferences")
-    .select(
-      "spotify_access_token_encrypted, spotify_refresh_token_encrypted, token_expires_at"
-    )
-    .eq("user_id", userId)
-    .single();
-
-  if (!prefs?.spotify_refresh_token_encrypted) {
-    throw new Error("No Spotify refresh token found for user");
+  // 1. Check resolved cache — valid for 4 minutes (token lifetime is ~1 hour)
+  const cached = TOKEN_CACHE.get(userId);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.token;
   }
 
-  const expiresAt = prefs.token_expires_at
-    ? new Date(prefs.token_expires_at)
-    : new Date(0);
-  const bufferMs = 5 * 60 * 1000;
+  // 2. Deduplicate in-flight fetches — if a DB/refresh call is already
+  //    running for this user, wait for it rather than spawning a duplicate.
+  const inflight = TOKEN_INFLIGHT.get(userId);
+  if (inflight) return inflight;
 
-  if (
-    prefs.spotify_access_token_encrypted &&
-    expiresAt.getTime() > Date.now() + bufferMs
-  ) {
-    return decrypt(prefs.spotify_access_token_encrypted);
-  }
+  const promise = (async (): Promise<string> => {
+    try {
+      const supabase = createAdminClient();
 
-  const refreshToken = decrypt(prefs.spotify_refresh_token_encrypted);
-  const tokenResponse = await refreshSpotifyToken(refreshToken);
+      const { data: prefs } = await supabase
+        .from("user_preferences")
+        .select(
+          "spotify_access_token_encrypted, spotify_refresh_token_encrypted, token_expires_at"
+        )
+        .eq("user_id", userId)
+        .single();
 
-  const newAccessTokenEncrypted = encrypt(tokenResponse.access_token);
-  const newExpiresAt = new Date(
-    Date.now() + tokenResponse.expires_in * 1000
-  ).toISOString();
+      if (!prefs?.spotify_refresh_token_encrypted) {
+        throw new Error("No Spotify refresh token found for user");
+      }
 
-  const updateData: Record<string, string> = {
-    spotify_access_token_encrypted: newAccessTokenEncrypted,
-    token_expires_at: newExpiresAt,
-    updated_at: new Date().toISOString(),
-  };
+      const expiresAt = prefs.token_expires_at
+        ? new Date(prefs.token_expires_at)
+        : new Date(0);
+      const bufferMs = 5 * 60 * 1000;
 
-  if (tokenResponse.refresh_token) {
-    updateData.spotify_refresh_token_encrypted = encrypt(
-      tokenResponse.refresh_token
-    );
-  }
+      if (
+        prefs.spotify_access_token_encrypted &&
+        expiresAt.getTime() > Date.now() + bufferMs
+      ) {
+        const token = decrypt(prefs.spotify_access_token_encrypted);
+        TOKEN_CACHE.set(userId, { token, expiresAt: expiresAt.getTime() });
+        return token;
+      }
 
-  // Store the granted scopes so routes can pre-flight check before touching Spotify
-  if (tokenResponse.scope) {
-    updateData.spotify_scopes = tokenResponse.scope;
-  }
+      // Token expired — refresh it
+      const refreshToken = decrypt(prefs.spotify_refresh_token_encrypted);
+      const tokenResponse = await refreshSpotifyToken(refreshToken);
 
-  await supabase
-    .from("user_preferences")
-    .update(updateData)
-    .eq("user_id", userId);
+      const newAccessTokenEncrypted = encrypt(tokenResponse.access_token);
+      const newExpiresAt = new Date(
+        Date.now() + tokenResponse.expires_in * 1000
+      ).toISOString();
 
-  return tokenResponse.access_token;
+      const updateData: Record<string, string> = {
+        spotify_access_token_encrypted: newAccessTokenEncrypted,
+        token_expires_at:               newExpiresAt,
+        updated_at:                     new Date().toISOString(),
+      };
+
+      if (tokenResponse.refresh_token) {
+        updateData.spotify_refresh_token_encrypted = encrypt(tokenResponse.refresh_token);
+      }
+      if (tokenResponse.scope) {
+        updateData.spotify_scopes = tokenResponse.scope;
+      }
+
+      await supabase
+        .from("user_preferences")
+        .update(updateData)
+        .eq("user_id", userId);
+
+      // Cache for just under the token's actual lifetime
+      TOKEN_CACHE.set(userId, {
+        token:     tokenResponse.access_token,
+        expiresAt: Date.now() + tokenResponse.expires_in * 1000,
+      });
+
+      return tokenResponse.access_token;
+    } finally {
+      TOKEN_INFLIGHT.delete(userId);
+    }
+  })();
+
+  TOKEN_INFLIGHT.set(userId, promise);
+  return promise;
 }
 
 async function refreshSpotifyToken(
