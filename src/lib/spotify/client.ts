@@ -93,6 +93,31 @@ class SpotifyClient {
     );
   }
 
+  /** Find an artist by name — returns their Spotify ID and canonical name, or null. */
+  async searchArtist(name: string): Promise<{ id: string; name: string } | null> {
+    try {
+      const encoded = encodeURIComponent(name);
+      const result = await this.request<{
+        artists: { items: Array<{ id: string; name: string }> };
+      }>(`/search?q=${encoded}&type=artist&limit=3`);
+      return result.artists.items[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Get an artist's top tracks (sorted by Spotify popularity). */
+  async getArtistTopTracks(artistId: string): Promise<SpotifyTrack[]> {
+    try {
+      const result = await this.request<{ tracks: SpotifyTrack[] }>(
+        `/artists/${artistId}/top-tracks?market=US`
+      );
+      return result.tracks ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Find a specific track by name + artist with artist validation.
    * Uses two strategies so special characters in artist names (e.g. &ME, A$AP)
