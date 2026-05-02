@@ -5,10 +5,12 @@ import { SPOTIFY_SCOPES } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Music, BarChart3, Sparkles, Users, AlertCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+// useSearchParams() requires a Suspense boundary in Next.js — extract it
+// into a child component so the build doesn't fail during prerendering.
+function LoginContent() {
   const searchParams = useSearchParams();
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -108,5 +110,13 @@ function Feature({ icon: Icon, text }: { icon: React.ElementType; text: string }
       <Icon className="w-4 h-4 text-primary shrink-0" />
       <span>{text}</span>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginContent />
+    </Suspense>
   );
 }
