@@ -244,11 +244,12 @@ export async function POST(request: NextRequest) {
     if (familiarity === "fresh" || !hasData) {
       const recentTracksStr = [...recentSet].slice(0, 20).map((k) => k.split("|||")[0]).join(", ");
 
-      // Ask for extra artists as buffer in case some fail Spotify resolution.
-      // Cap at 15 — asking for 29 niche-genre artists (e.g. "afro house") causes AI to
-      // hallucinate names, which then fail Spotify lookup and produce 0 results.
+      // Ask for artists as buffer in case some fail Spotify resolution.
+      // Hard cap at 10: each artist = 2 Spotify calls (search + top-tracks).
+      // 10 artists × 2 calls = 20 calls → stays well under Vercel's function timeout.
+      // More artists doesn't help for niche genres — the AI starts hallucinating names.
       const targetCount = familiarity === "fresh" ? counts.total : counts.discovery;
-      const askFor      = Math.min(Math.ceil(targetCount * 1.6), 15);
+      const askFor      = Math.min(Math.ceil(targetCount * 1.5), 10);
 
       const freshPrompt = `You are curating a discovery playlist for a music lover.
 
@@ -296,54 +297,10 @@ Return ONLY valid JSON:
         userMarket,
       );
 
-      // Fallback: if artist resolution came up short (market issues, obscure artists),
-      // ask AI for specific track names and verify each directly on Spotify
-      if (tracks.length < Math.ceil(targetCount * 0.5)) {
-        const fallbackPrompt = `The Spotify artist lookup failed to find enough tracks.
-Name ${targetCount} specific SONGS (track + artist) matching: "${requestStr}"
-These must be tracks that definitely exist on Spotify with exact titles.
-Exclude artists: ${topArtists || "none"}
-
-Return ONLY valid JSON:
-{
-  "tracks": [{ "trackName": "exact title", "artistName": "exact artist", "reason": "one sentence" }]
-}`;
-        try {
-          const fbRes = await openai.chat.completions.create({
-            model: FAST_MODEL, max_tokens: 700,
-            messages: [
-              { role: "system", content: MUSIC_EXPERT_SYSTEM },
-              { role: "user", content: fallbackPrompt },
-            ],
-          });
-          const fbText  = fbRes.choices[0].message.content ?? "";
-          const fbMatch = fbText.match(/\{[\s\S]*\}/)?.[0];
-          if (fbMatch) {
-            const fbResult = JSON.parse(fbMatch) as { tracks: { trackName: string; artistName: string; reason: string }[] };
-            const fbVerified = await Promise.allSettled(
-              fbResult.tracks.map(async (t) => {
-                const found = await spotify.findTrack(t.trackName, t.artistName);
-                if (!found) return null;
-                return {
-                  trackName: t.trackName, artistName: t.artistName,
-                  section: "discovery" as const, reason: t.reason,
-                  spotifyTrackId: found.id, spotifyUri: `spotify:track:${found.id}`,
-                  albumImageUrl: found.album.images[0]?.url ?? null,
-                };
-              })
-            );
-            const fallbackTracks: PlaylistTrack[] = [];
-            for (const r of fbVerified) {
-              if (r.status === "fulfilled" && r.value) fallbackTracks.push(r.value);
-            }
-            tracks = [...tracks, ...fallbackTracks];
-          }
-        } catch { /* fallback is best-effort */ }
-      }
-
-      // Last resort: direct Spotify keyword search — works great for genre requests
-      // like "afro house", "cumbia", "drill", etc. where the AI can't reliably name
-      // enough obscure artists but a search query returns real verified tracks instantly.
+      // Fallback: direct Spotify keyword search — runs whenever artist resolution
+      // didn't fill the list. Much faster and more reliable than asking the AI for
+      // specific track names (which it hallucinates for niche genres like "afro house").
+      // One search call returns 20 real, verified tracks in ~200 ms.
       if (tracks.length < targetCount) {
         try {
           const knownArtistNorms = new Set(
