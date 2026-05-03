@@ -1269,6 +1269,39 @@ Return ONLY valid JSON:
         }
       }
 
+      if (resetCandidates.length === 0) {
+        const fallbackTracks = await buildFastSearchPlaylist({
+          spotify,
+          requestStr: [
+            breakLoopTarget,
+            genreLock,
+            allGenres[0],
+            intensity === "high" ? "upbeat fresh finds" : "",
+            intensity === "low" ? "chill fresh finds" : "",
+            "fresh finds",
+            requestStr,
+          ].filter(Boolean).join(" "),
+          allGenres,
+          intent: breakIntent,
+          intensity,
+          targetCount: counts.total,
+          recentSet,
+          knownArtistNorms,
+          avoidKnownArtists: false,
+        });
+
+        if (fallbackTracks.length > 0) {
+          const intro = `Your ${modeConfig.label.toLowerCase()} loop reset uses a wider fallback lane because Spotify did not return enough strict reset candidates. It still avoids your recent plays and gives you fresh tracks to move with.`;
+          return buildResponse(
+            sequencePlaylist(fallbackTracks, "build"),
+            intro,
+            requestStr,
+            user.id,
+            cacheKey,
+          );
+        }
+      }
+
       const rankedResetRows = resetCandidates
         .map((item, index) => ({
           ...item,
