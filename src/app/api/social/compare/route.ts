@@ -61,20 +61,22 @@ export async function POST(request: Request) {
   const theirTrackList = theirTracks ?? [];
 
   // Normalise names for comparison (case-insensitive)
-  const norm = (s: string) => s.toLowerCase().trim();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const trackKey = (trackName: string, artistName: string) => norm(`${trackName}|||${artistName}`);
-  const overlapPct = (a: Set<string>, b: Set<string>) => {
-    const unionSize = new Set([...a, ...b]).size;
-    if (unionSize === 0) return 0;
-    const intersectionSize = [...a].filter((item) => b.has(item)).length;
-    return Math.round((intersectionSize / unionSize) * 100);
+  const overlapScore = (count: number, pointsEach: number) => Math.min(100, count * pointsEach);
+  const countOverlap = (a: Set<string>, b: Set<string>) => {
+    return [...a].filter((item) => item && b.has(item)).length;
   };
   const myNameSet = new Set(myList.map((a) => norm(a.artist_name)));
   const theirNameSet = new Set(theirList.map((a) => norm(a.artist_name)));
+  const myTrackArtistSet = new Set(myTrackList.flatMap((t) => t.artist_names ?? []).map(norm));
+  const theirTrackArtistSet = new Set(theirTrackList.flatMap((t) => t.artist_names ?? []).map(norm));
+  const myCombinedArtistSet = new Set([...myNameSet, ...myTrackArtistSet]);
+  const theirCombinedArtistSet = new Set([...theirNameSet, ...theirTrackArtistSet]);
 
   // Shared artists (preserve image + original name from my list)
-  const sharedArtists = myList
-    .filter((a) => theirNameSet.has(norm(a.artist_name)))
+  const directSharedArtists = myList
+    .filter((a) => theirCombinedArtistSet.has(norm(a.artist_name)))
     .slice(0, 8)
     .map((a) => ({ artistName: a.artist_name, imageUrl: a.image_url ?? null }));
 
@@ -97,7 +99,6 @@ export async function POST(request: Request) {
   const sharedGenres = myGenres.filter((g) => theirGenreSet.has(norm(g))).slice(0, 8);
   const theirUniqueGenres = theirGenres.filter((g) => !myGenreSet.has(norm(g))).slice(0, 5);
 
-  const myTrackSet = new Set(myTrackList.map((t) => trackKey(t.track_name, t.artist_names?.[0] ?? "")));
   const theirTrackSet = new Set(theirTrackList.map((t) => trackKey(t.track_name, t.artist_names?.[0] ?? "")));
   const sharedTracks = myTrackList
     .filter((t) => theirTrackSet.has(trackKey(t.track_name, t.artist_names?.[0] ?? "")))
@@ -107,11 +108,26 @@ export async function POST(request: Request) {
       artistName: t.artist_names?.[0] ?? "",
       albumImageUrl: t.album_image_url ?? null,
     }));
+  const sharedArtists = [
+    ...directSharedArtists,
+    ...sharedTracks
+      .filter((track) => !directSharedArtists.some((artist) => norm(artist.artistName) === norm(track.artistName)))
+      .map((track) => ({ artistName: track.artistName, imageUrl: null })),
+  ].slice(0, 8);
 
-  const artistOverlap = overlapPct(myNameSet, theirNameSet);
-  const genreOverlap = overlapPct(new Set(myGenres.map(norm)), theirGenreSet);
-  const trackOverlap = overlapPct(myTrackSet, theirTrackSet);
-  const similarityScore = Math.round(artistOverlap * 0.5 + genreOverlap * 0.35 + trackOverlap * 0.15);
+  const sharedArtistCount = countOverlap(myCombinedArtistSet, theirCombinedArtistSet);
+  const artistOverlap = overlapScore(sharedArtistCount, 10);
+  const genreOverlap = overlapScore(sharedGenres.length, 14);
+  const trackOverlap = overlapScore(sharedTracks.length, 18);
+  const baseScore = Math.round(artistOverlap * 0.45 + genreOverlap * 0.25 + trackOverlap * 0.3);
+  const similarityScore = Math.min(
+    100,
+    Math.max(
+      sharedTracks.length > 0 ? 10 : 0,
+      sharedArtistCount > 0 ? 8 : 0,
+      baseScore,
+    ),
+  );
   const friendBreakTarget = [
     ...theirUniqueGenres.slice(0, 3),
     ...theirUniqueArtists.slice(0, 4),
