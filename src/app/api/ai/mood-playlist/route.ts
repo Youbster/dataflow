@@ -5,7 +5,7 @@ import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
-import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
+import type { SpotifyTrack } from "@/types/spotify";
 
 // Give Vercel up to 30 seconds for this function (Pro plan).
 // Hobby plan is capped at 10s regardless; the client-side AbortController
@@ -482,6 +482,106 @@ function buildFreshSearchQueries(
   return queries.filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i);
 }
 
+async function buildFastSearchPlaylist({
+  spotify,
+  requestStr,
+  allGenres,
+  intent,
+  intensity,
+  targetCount,
+  recentSet,
+  knownArtistNorms,
+  avoidKnownArtists,
+}: {
+  spotify: ReturnType<typeof createSpotifyClient>;
+  requestStr: string;
+  allGenres: string[];
+  intent: PlaylistIntent;
+  intensity: "low" | "mid" | "high";
+  targetCount: number;
+  recentSet: Set<string>;
+  knownArtistNorms: Set<string>;
+  avoidKnownArtists: boolean;
+}): Promise<PlaylistTrack[]> {
+  const genericStop = new Set(["break", "spotify", "loop", "reset", "refresh", "discover", "music", "playlist"]);
+  const cleanQuery = (query: string) =>
+    normalizeToken(query)
+      .split(/\s+/)
+      .filter((token) => token.length > 2 && !genericStop.has(token))
+      .join(" ");
+  const primaryQueries = buildFreshSearchQueries(requestStr, allGenres, intent, intensity)
+    .map(cleanQuery)
+    .filter(Boolean);
+  const queries = uniqueStrings(
+    [
+      intent.keywords.slice(0, 3).map(cleanQuery).filter(Boolean).join(" "),
+      ...intent.genres,
+      ...primaryQueries,
+      ...allGenres.slice(0, 5),
+      intensity === "high" ? "workout dance" : "",
+      intensity === "low" ? "chill electronic" : "",
+      "fresh finds",
+      "new music friday",
+      "indie pop",
+      "electronic",
+      "alternative",
+    ],
+    10,
+  );
+  const searchResults = await withTimeout(
+    Promise.allSettled(
+      queries.map((query) =>
+        spotify.searchTracks(query, 30).then((result) => ({ query, result }))
+      )
+    ),
+    9_000,
+    [],
+  );
+
+  const picked: PlaylistTrack[] = [];
+  const seenIds = new Set<string>();
+  const artistCounts = new Map<string, number>();
+  const addTrack = (track: SpotifyTrack, query: string, relaxKnownArtists: boolean) => {
+    if (picked.length >= targetCount || seenIds.has(track.id)) return;
+    const artistName = track.artists[0]?.name ?? "";
+    const artistNorm = normalizeForCompare(artistName);
+    if (!artistNorm) return;
+    if (recentSet.has(`${track.name}|||${artistName}`)) return;
+    if (avoidKnownArtists && !relaxKnownArtists && knownArtistNorms.has(artistNorm)) return;
+    if ((artistCounts.get(artistNorm) ?? 0) >= 2) return;
+
+    const section =
+      picked.length < Math.max(1, Math.round(targetCount * 0.2))
+        ? "anchor"
+        : picked.length < Math.max(2, Math.round(targetCount * 0.65))
+        ? "groove"
+        : "discovery";
+
+    seenIds.add(track.id);
+    artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
+    picked.push(
+      section === "discovery"
+        ? resolveSpotifyDiscoveryTrack(track, `Fresh find from "${query}"`)
+        : resolveSpotifyTrack(
+            track,
+            section,
+            section === "anchor" ? `Starter anchor from "${query}"` : `Keeps the vibe moving from "${query}"`,
+          )
+    );
+  };
+
+  const rows = searchResults
+    .filter((item): item is PromiseFulfilledResult<{ query: string; result: Awaited<ReturnType<typeof spotify.searchTracks>> }> => item.status === "fulfilled")
+    .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
+
+  for (const { track, query } of rows) addTrack(track, query, false);
+  if (picked.length < Math.ceil(targetCount * 0.5)) {
+    for (const { track, query } of rows) addTrack(track, query, true);
+  }
+
+  return picked.slice(0, targetCount);
+}
+
 /** Maps a SpotifyTrack directly to a PlaylistTrack — no extra API calls needed. */
 function resolveSpotifyTrack(
   t: SpotifyTrack,
@@ -645,17 +745,28 @@ export async function POST(request: NextRequest) {
     // Now: 4 parallel Spotify API calls — token is cached in-process (token.ts),
     // so only 1 DB hit happens (first call), subsequent calls use the cache.
     // Total expected latency: ~300-600 ms vs 5-30 s.
+    type TopTracksPage = Awaited<ReturnType<typeof spotify.getTopTracks>>;
+    type TopArtistsPage = Awaited<ReturnType<typeof spotify.getTopArtists>>;
+    type RecentPage = Awaited<ReturnType<typeof spotify.getRecentlyPlayed>>;
+    const emptyTracksPage: TopTracksPage = { items: [], total: 0, limit: 0, offset: 0, next: null };
+    const emptyArtistsPage: TopArtistsPage = { items: [], total: 0, limit: 0, offset: 0, next: null };
+    const emptyRecentPage: RecentPage = { items: [], next: null, cursors: null };
+    const spotifyProfilePromise = Promise.all([
+      spotify.getTopTracks("short_term", 50).catch(() => emptyTracksPage),
+      spotify.getTopTracks("long_term",  50).catch(() => emptyTracksPage),
+      spotify.getTopArtists("short_term", 10).catch(() => emptyArtistsPage),
+      spotify.getRecentlyPlayed(50).catch(() => emptyRecentPage),
+    ]) as Promise<[TopTracksPage, TopTracksPage, TopArtistsPage, RecentPage]>;
     const [
       shortTracksData,
       longTracksData,
       shortArtistsData,
       recentlyPlayedData,
-    ] = await Promise.all([
-      spotify.getTopTracks("short_term", 50).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
-      spotify.getTopTracks("long_term",  50).catch(() => ({ items: [] as SpotifyTrack[], total: 0, limit: 0, offset: 0, next: null })),
-      spotify.getTopArtists("short_term", 10).catch(() => ({ items: [] as SpotifyArtist[], total: 0, limit: 0, offset: 0, next: null })),
-      spotify.getRecentlyPlayed(50).catch(() => ({ items: [], next: null, cursors: null })),
-    ]);
+    ] = await withTimeout(
+      spotifyProfilePromise,
+      generationGoal === "break_loop" ? 5_500 : 6_500,
+      [emptyTracksPage, emptyTracksPage, emptyArtistsPage, emptyRecentPage],
+    );
 
     // ── Build recent set + play counts from recently-played ───────────────────
     const playCounts7d: Record<string, number> = {};
@@ -722,6 +833,38 @@ export async function POST(request: NextRequest) {
     const knownArtistNorms = new Set(
       topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => normalizeForCompare(s.trim()))
     );
+
+    if (!hasData) {
+      const targetCount = counts.total;
+      const starterTracks = await buildFastSearchPlaylist({
+        spotify,
+        requestStr: breakLoopTarget || genreLock || requestStr,
+        allGenres,
+        intent: fallbackIntent,
+        intensity,
+        targetCount,
+        recentSet,
+        knownArtistNorms,
+        avoidKnownArtists: false,
+      });
+
+      if (starterTracks.length === 0) {
+        return NextResponse.json(
+          { error: "Spotify did not return enough tracks yet. Try adding a genre or mood like 'afro house workout'." },
+          { status: 422 },
+        );
+      }
+
+      const starterLabel = generationGoal === "break_loop" ? "starter loop reset" : "starter playlist";
+      const intro = `Built a ${starterLabel} from your request while your Spotify taste profile warms up. Sync more listening history and the next one will get more personal.`;
+      return buildResponse(
+        sequencePlaylist(starterTracks, fallbackIntent.flow),
+        intro,
+        requestStr,
+        user.id,
+        cacheKey,
+      );
+    }
 
     // ── BREAK MY LOOP MODE ───────────────────────────────────────────────────
     //
