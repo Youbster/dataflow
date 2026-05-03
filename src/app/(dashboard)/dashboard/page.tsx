@@ -54,6 +54,14 @@ const ACTIVITY_CHIPS = [
 type Phase = "pick" | "loading" | "result";
 type Vibe  = "familiar" | "mixed" | "fresh";
 type GenerationGoal = "build_vibe" | "break_loop";
+type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
+
+const BREAK_LOOP_MODES: Array<{ value: BreakLoopMode; label: string; short: string }> = [
+  { value: "near_taste", label: "Near Taste", short: "same world" },
+  { value: "new_lane", label: "New Lane", short: "adjacent genre" },
+  { value: "energy_shift", label: "Energy Switch", short: "change tempo" },
+  { value: "surprise", label: "Surprise", short: "bigger jump" },
+];
 
 interface RecentTrack {
   spotifyTrackId: string;
@@ -164,6 +172,8 @@ export default function DashboardPage() {
   const [intensity, setIntensity]     = useState<"low" | "mid" | "high">("mid");
   const [sessionMins, setSessionMins] = useState<20 | 60 | 120>(60);
   const [vibe, setVibe]               = useState<Vibe>("mixed");
+  const [breakLoopMode, setBreakLoopMode] = useState<BreakLoopMode>("near_taste");
+  const [breakLoopTarget, setBreakLoopTarget] = useState("");
 
   // generator — advanced
   const [showMore, setShowMore]       = useState(false);
@@ -265,11 +275,15 @@ export default function DashboardPage() {
     prompt,
     familiarity,
     discovery,
+    loopMode,
+    loopTarget,
   }: {
     goal: GenerationGoal;
     prompt: string;
     familiarity: Vibe;
     discovery: boolean;
+    loopMode?: BreakLoopMode;
+    loopTarget?: string;
   }) {
     setPhase("loading");
     setGenerationGoal(goal);
@@ -292,6 +306,8 @@ export default function DashboardPage() {
         body: JSON.stringify({
           goal,
           prompt,
+          breakLoopMode: loopMode ?? breakLoopMode,
+          breakLoopTarget: loopTarget ?? breakLoopTarget.trim(),
           seedTrack: null,
           sessionMinutes: sessionMins,
           familiarity,
@@ -339,11 +355,16 @@ export default function DashboardPage() {
   }
 
   async function breakLoop() {
+    const target = breakLoopTarget.trim();
     await runPlaylistRequest({
       goal: "break_loop",
-      prompt: promptText.trim() || "Break my Spotify loop",
+      prompt: target
+        ? `Break my Spotify loop toward ${target}`
+        : promptText.trim() || "Break my Spotify loop",
       familiarity: "mixed",
       discovery: false,
+      loopMode: breakLoopMode,
+      loopTarget: target,
     });
   }
 
@@ -484,6 +505,33 @@ export default function DashboardPage() {
               <p className="text-sm font-bold">{homeData.loop.discoveryRate}%</p>
               <p className="text-[10px] text-muted-foreground">one-offs</p>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {BREAK_LOOP_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  onClick={() => setBreakLoopMode(mode.value)}
+                  className={`rounded-xl border px-2 py-2 text-left transition-all ${
+                    breakLoopMode === mode.value
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border bg-accent/30 text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <span className="block text-xs font-semibold leading-tight">{mode.label}</span>
+                  <span className="block text-[10px] leading-tight mt-0.5 opacity-70">{mode.short}</span>
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={breakLoopTarget}
+              onChange={(e) => setBreakLoopTarget(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); breakLoop(); } }}
+              placeholder="Optional direction: afro house, gym energy, less rap..."
+              className="w-full rounded-xl bg-accent/40 border border-border px-3 py-2 text-xs placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all"
+            />
           </div>
 
           <Button onClick={breakLoop} disabled={phase === "loading"} className="w-full h-9 text-sm font-semibold">

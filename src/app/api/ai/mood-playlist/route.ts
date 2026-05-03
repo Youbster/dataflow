@@ -57,6 +57,7 @@ interface CachedPlaylist {
 }
 
 type GenerationGoal = "build_vibe" | "break_loop";
+type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
 
 const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
 const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -238,6 +239,8 @@ function buildCacheKey(
     familiarity: string;
     intensity: string;
     goal: GenerationGoal;
+    breakLoopMode: BreakLoopMode;
+    breakLoopTarget: string;
     vocals: string;
     language: string;
     genreLock: string | null;
@@ -251,6 +254,8 @@ function buildCacheKey(
     familiarity: body.familiarity,
     intensity: body.intensity,
     goal: body.goal,
+    breakLoopMode: body.breakLoopMode,
+    breakLoopTarget: normalizeToken(body.breakLoopTarget),
     vocals: body.vocals,
     language: body.language,
     genreLock: normalizeToken(body.genreLock ?? ""),
@@ -582,6 +587,15 @@ export async function POST(request: NextRequest) {
   const familiarity: "familiar" | "mixed" | "fresh" = body.familiarity ?? "mixed";
   const intensity:   "low" | "mid" | "high"        = body.intensity   ?? "mid";
   const generationGoal: GenerationGoal = body.goal === "break_loop" ? "break_loop" : "build_vibe";
+  const breakLoopMode: BreakLoopMode =
+    body.breakLoopMode === "new_lane" ||
+    body.breakLoopMode === "energy_shift" ||
+    body.breakLoopMode === "surprise"
+      ? body.breakLoopMode
+      : "near_taste";
+  const breakLoopTarget: string = typeof body.breakLoopTarget === "string"
+    ? body.breakLoopTarget.trim().slice(0, 80)
+    : "";
   const vocals:      "any" | "lyrics" | "instrumental" = body.vocals  ?? "any";
   const language:    "any" | "english" | "match"   = body.language    ?? "any";
   const genreLock:   string | null = body.genreLock  ?? null;
@@ -599,6 +613,8 @@ export async function POST(request: NextRequest) {
     familiarity,
     intensity,
     goal: generationGoal,
+    breakLoopMode,
+    breakLoopTarget,
     vocals,
     language,
     genreLock,
@@ -708,10 +724,58 @@ export async function POST(request: NextRequest) {
     // Spotify search against the user's taste DNA while hard-blocking recent
     // history plus short-term and long-term top tracks.
     if (generationGoal === "break_loop") {
-      const comfortTarget   = Math.max(1, Math.round(counts.total * 0.2));
-      const forgottenTarget = Math.max(1, Math.round(counts.total * 0.2));
-      const breakIntent = await parsePlaylistIntent(
+      const modeConfig = {
+        near_taste: {
+          label: "Near Taste",
+          comfortPct: 0.35,
+          bridgePct: 0.25,
+          strictBlocksKnownArtists: false,
+          aiDirection: "Stay close to their taste and genres, but use different tracks and mostly adjacent artists.",
+          queryBoosts: ["deep cuts", "underrated", "radio", "mix"],
+        },
+        new_lane: {
+          label: "New Lane",
+          comfortPct: 0.2,
+          bridgePct: 0.25,
+          strictBlocksKnownArtists: true,
+          aiDirection: "Move one genre lane away from their current taste while keeping the same emotional feel.",
+          queryBoosts: ["adjacent genre", "new wave", "underground", "crossover"],
+        },
+        energy_shift: {
+          label: "Energy Switch",
+          comfortPct: 0.2,
+          bridgePct: 0.2,
+          strictBlocksKnownArtists: false,
+          aiDirection: intensity === "low"
+            ? "Switch the energy downward: calmer, smoother, less intense than their usual loop."
+            : intensity === "high"
+            ? "Switch the energy upward: more driving, physical, and energetic than their usual loop."
+            : "Shift the energy away from the user's loop while keeping it playable.",
+          queryBoosts: intensity === "low"
+            ? ["chill", "downtempo", "late night", "soft"]
+            : ["upbeat", "dance", "driving", "workout"],
+        },
+        surprise: {
+          label: "Surprise",
+          comfortPct: 0.1,
+          bridgePct: 0.15,
+          strictBlocksKnownArtists: true,
+          aiDirection: "Take a bigger but still tasteful jump. Prioritize novelty and discovery over familiarity.",
+          queryBoosts: ["fresh finds", "left field", "global", "indie"],
+        },
+      }[breakLoopMode];
+      const targetDirection = breakLoopTarget
+        ? `User target direction: ${breakLoopTarget}. Treat this as the strongest direction signal.`
+        : "";
+      const comfortTarget   = Math.max(1, Math.round(counts.total * modeConfig.comfortPct));
+      const forgottenTarget = Math.max(1, Math.round(counts.total * modeConfig.bridgePct));
+      const modeRequestStr = [
         requestStr,
+        modeConfig.label,
+        targetDirection,
+      ].filter(Boolean).join(" — ");
+      const breakIntent = await parsePlaylistIntent(
+        modeRequestStr,
         "mixed",
         intensity,
         constraintsStr,
@@ -773,9 +837,10 @@ export async function POST(request: NextRequest) {
       );
       const breakScoreContext: ScoreContext = {
         intent: { ...breakIntent, freshness: "mixed" },
-        requestTokens: new Set(tokensFromText(`${requestStr} ${genreStr} refresh discovery`)),
+        requestTokens: new Set(tokensFromText(`${modeRequestStr} ${genreStr} refresh discovery ${modeConfig.queryBoosts.join(" ")}`)),
         genreTokens: new Set([
           ...tokensFromText(genreStr),
+          ...tokensFromText(breakLoopTarget),
           ...breakIntent.genres.flatMap(tokensFromText),
         ]),
         knownArtistNorms,
@@ -793,7 +858,8 @@ export async function POST(request: NextRequest) {
         if (!artistNorm) return false;
         if (existingIds.has(track.id) || blockedTrackIds.has(track.id)) return false;
         if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return false;
-        if (strict && (knownArtistNorms.has(artistNorm) || repeatedArtistNorms.has(artistNorm))) return false;
+        if (strict && repeatedArtistNorms.has(artistNorm)) return false;
+        if (strict && modeConfig.strictBlocksKnownArtists && knownArtistNorms.has(artistNorm)) return false;
         if ((artistPickCounts.get(artistNorm) ?? 0) >= 2) return false;
         existingIds.add(track.id);
         artistPickCounts.set(artistNorm, (artistPickCounts.get(artistNorm) ?? 0) + 1);
@@ -810,8 +876,10 @@ export async function POST(request: NextRequest) {
       const tasteQueries = uniqueStrings(
         [
           genreLock ?? "",
+          breakLoopTarget,
           ...breakIntent.genres,
           ...breakIntent.keywords.map(cleanResetQuery),
+          ...modeConfig.queryBoosts,
           ...allGenres.slice(0, 8),
           genreStr.split(",")[0] ?? "",
           "indie dance",
@@ -821,7 +889,7 @@ export async function POST(request: NextRequest) {
         14,
       );
       const breakerQueries = buildFreshSearchQueries(
-        `${requestStr} ${tasteQueries.slice(0, 4).join(" ")}`,
+        `${modeRequestStr} ${tasteQueries.slice(0, 4).join(" ")}`,
         allGenres,
         breakIntent,
         intensity,
@@ -844,14 +912,17 @@ export async function POST(request: NextRequest) {
         const askFor = Math.min(20, counts.total * 2);
         const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
 
-REQUEST: "${requestStr}"${intensityStr}
+REQUEST: "${requestStr}"
+MODE: ${modeConfig.label}
+DIRECTION: ${modeConfig.aiDirection}
+${targetDirection}${intensityStr}
 
 LISTENER TASTE DNA:
 - Core genres: ${genreStr || "varied"}
 - Favorite artists to use only as reference, not suggestions: ${topArtists || "none"}
 - Hard-block these tracks completely: ${blockedTrackLabels.join("; ") || "none"}${constraintsStr}
 
-Suggest ${askFor} real Spotify tracks that are taste-adjacent but outside the blocked list. Prefer artists one step away from their taste, not their obvious top artists.
+Suggest ${askFor} real Spotify tracks that follow the MODE and DIRECTION, fit the user's taste, and stay outside the blocked list.
 
 Return ONLY valid JSON:
 {
@@ -950,8 +1021,8 @@ Return ONLY valid JSON:
 
       const dominantArtist = [...recentArtistCounts.values()].sort((a, b) => b.count - a.count)[0]?.name ?? null;
       const intro = dominantArtist
-        ? `Your loop reset is built to step away from ${dominantArtist}: a few safe anchors, forgotten favorites, and fresh taste-adjacent tracks.`
-        : "Your loop reset mixes safe anchors, forgotten favorites, and fresh taste-adjacent tracks outside your recent repeats.";
+        ? `Your ${modeConfig.label.toLowerCase()} loop reset steps away from ${dominantArtist}${breakLoopTarget ? ` toward ${breakLoopTarget}` : ""}: safe anchors, bridges, and fresh breakers.`
+        : `Your ${modeConfig.label.toLowerCase()} loop reset${breakLoopTarget ? ` toward ${breakLoopTarget}` : ""} mixes safe anchors, bridges, and fresh tracks outside your repeats.`;
 
       return buildResponse(allTracks, intro, requestStr, user.id, cacheKey);
     }
