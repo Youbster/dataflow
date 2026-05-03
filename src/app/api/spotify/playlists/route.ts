@@ -4,6 +4,19 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getValidSpotifyToken, invalidateTokenCache } from "@/lib/spotify/token";
 import { SPOTIFY_API_BASE } from "@/lib/constants";
 
+class SpotifyApiError extends Error {
+  status: number;
+  body: string;
+  url: string;
+
+  constructor(status: number, body: string, url: string) {
+    super(`SPOTIFY_${status}: ${body}`);
+    this.status = status;
+    this.body = body;
+    this.url = url;
+  }
+}
+
 async function spotifyFetch(url: string, token: string, options: RequestInit = {}) {
   const res = await fetch(`${SPOTIFY_API_BASE}${url}`, {
     ...options,
@@ -17,9 +30,38 @@ async function spotifyFetch(url: string, token: string, options: RequestInit = {
     const body = await res.text();
     // Log the real Spotify error so it's visible in Vercel function logs
     console.error(`[playlists] Spotify ${res.status} on ${url}:`, body);
-    throw new Error(`SPOTIFY_${res.status}: ${body}`);
+    throw new SpotifyApiError(res.status, body, url);
   }
   return res.status === 204 ? null : res.json();
+}
+
+function cleanTrackUris(trackUris: unknown): string[] {
+  if (!Array.isArray(trackUris)) return [];
+
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const uri of trackUris) {
+    if (typeof uri !== "string") continue;
+    if (!/^spotify:track:[A-Za-z0-9]+$/.test(uri)) continue;
+    if (seen.has(uri)) continue;
+    seen.add(uri);
+    cleaned.push(uri);
+  }
+  return cleaned;
+}
+
+async function addTracksToSpotifyPlaylist(
+  playlistId: string,
+  trackUris: string[],
+  token: string,
+) {
+  const batchSize = 100;
+  for (let i = 0; i < trackUris.length; i += batchSize) {
+    await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+      method: "POST",
+      body: JSON.stringify({ uris: trackUris.slice(i, i + batchSize) }),
+    });
+  }
 }
 
 export async function POST(request: Request) {
@@ -32,6 +74,17 @@ export async function POST(request: Request) {
 
   try {
     const { playlistId, name, description, trackUris } = await request.json();
+    const playableUris = cleanTrackUris(trackUris);
+
+    if (playableUris.length === 0) {
+      return NextResponse.json(
+        {
+          error: "This generated playlist has no verified Spotify tracks to save. Generate a new playlist and try again.",
+          code: "no_playable_tracks",
+        },
+        { status: 400 }
+      );
+    }
 
     // ── Pre-flight scope check — avoids creating an empty playlist we can't fill ──
     // getValidSpotifyToken may have just refreshed and stored fresh scopes, so query now.
@@ -42,12 +95,14 @@ export async function POST(request: Request) {
       .eq("user_id", session.user.id)
       .single();
 
+    let canCreatePrivate = true;
+    let canCreatePublic = true;
+
     if (prefs?.spotify_scopes) {
       const granted = prefs.spotify_scopes.split(" ");
-      const canWrite =
-        granted.includes("playlist-modify-public") ||
-        granted.includes("playlist-modify-private");
-      if (!canWrite) {
+      canCreatePrivate = granted.includes("playlist-modify-private");
+      canCreatePublic = granted.includes("playlist-modify-public");
+      if (!canCreatePrivate && !canCreatePublic) {
         return NextResponse.json(
           {
             error: "Spotify playlist access not granted. Reconnect your Spotify account to fix this.",
@@ -63,28 +118,46 @@ export async function POST(request: Request) {
     if (prefs?.spotify_scopes) {
       invalidateTokenCache(session.user.id);
     }
-    const token = await getValidSpotifyToken(session.user.id);
+    let token = await getValidSpotifyToken(session.user.id);
 
     // Use /me/playlists — simpler and avoids user ID mismatch issues
+    const makePublic = !canCreatePrivate && canCreatePublic;
     const playlist = await spotifyFetch("/me/playlists", token, {
       method: "POST",
-      body: JSON.stringify({ name, description: description || "", public: false }),
+      body: JSON.stringify({ name, description: description || "", public: makePublic }),
     }) as { id: string; external_urls: { spotify: string } };
 
     // Add tracks — if this fails, delete the empty playlist so Spotify stays clean
-    const batchSize = 100;
     try {
-      for (let i = 0; i < trackUris.length; i += batchSize) {
-        await spotifyFetch(`/playlists/${playlist.id}/tracks`, token, {
-          method: "POST",
-          body: JSON.stringify({ uris: trackUris.slice(i, i + batchSize) }),
-        });
+      try {
+        await addTracksToSpotifyPlaylist(playlist.id, playableUris, token);
+      } catch (trackErr) {
+        if (trackErr instanceof SpotifyApiError && trackErr.status === 403) {
+          invalidateTokenCache(session.user.id);
+          token = await getValidSpotifyToken(session.user.id);
+          await addTracksToSpotifyPlaylist(playlist.id, playableUris, token);
+        } else {
+          throw trackErr;
+        }
       }
     } catch (trackErr) {
       // Best-effort cleanup: unfollow (delete) the empty playlist before re-throwing
       try {
         await spotifyFetch(`/playlists/${playlist.id}/followers`, token, { method: "DELETE" });
       } catch { /* ignore cleanup error */ }
+
+      if (trackErr instanceof SpotifyApiError) {
+        return NextResponse.json(
+          {
+            error: "Spotify created the playlist, but rejected adding the tracks.",
+            code: "track_add_failed",
+            detail: trackErr.body,
+            spotifyStatus: trackErr.status,
+          },
+          { status: 502 }
+        );
+      }
+
       throw trackErr;
     }
 
