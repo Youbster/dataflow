@@ -310,6 +310,37 @@ function cachedArtistToSpotifyArtist(row: CachedTopArtistRow): SpotifyArtist {
   };
 }
 
+function deriveArtistsFromTopTracks(
+  rows: CachedTopTrackRow[],
+  existingArtists: SpotifyArtist[],
+): SpotifyArtist[] {
+  const seen = new Set(existingArtists.map((artist) => artist.id).filter(Boolean));
+  const derived: SpotifyArtist[] = [];
+
+  for (const row of rows) {
+    const names = row.artist_names ?? [];
+    const ids = row.artist_ids ?? [];
+    for (let index = 0; index < Math.min(names.length, ids.length, 3); index++) {
+      const id = ids[index];
+      const name = names[index];
+      if (!id || !name || seen.has(id)) continue;
+      seen.add(id);
+      derived.push({
+        id,
+        name,
+        uri: `spotify:artist:${id}`,
+        genres: [],
+        images: [],
+        popularity: 50,
+        followers: { total: 0 },
+      });
+      if (derived.length >= 20) return derived;
+    }
+  }
+
+  return derived;
+}
+
 function uniqueStrings(values: string[], limit = 12): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -1014,7 +1045,13 @@ export async function POST(request: NextRequest) {
     );
     const shortTracksData = { items: shortTrackRows.map(cachedTrackToSpotifyTrack) };
     const longTracksData = { items: longTrackRows.map(cachedTrackToSpotifyTrack) };
-    const shortArtistsData = { items: shortArtistRows.map(cachedArtistToSpotifyArtist) };
+    const cachedArtists = shortArtistRows.map(cachedArtistToSpotifyArtist);
+    const shortArtistsData = {
+      items: [
+        ...cachedArtists,
+        ...deriveArtistsFromTopTracks([...shortTrackRows, ...longTrackRows], cachedArtists),
+      ].slice(0, 25),
+    };
     const recentlyPlayedData = {
       items: recentlyPlayedRows.map((row) => ({
         track: cachedTrackToSpotifyTrack(row),
@@ -1255,6 +1292,7 @@ export async function POST(request: NextRequest) {
         repeatedArtistNorms,
         knownArtistNorms,
       });
+      let bestBreakTracks: PlaylistTrack[] = escapePoolTracks;
 
       if (escapePoolTracks.length < minimumPoolTracks) {
         const topUpRequest = [
@@ -1338,6 +1376,7 @@ export async function POST(request: NextRequest) {
           seenTopUpIds.add(track.spotifyTrackId);
           combinedTracks.push(track);
         }
+        bestBreakTracks = combinedTracks.length > bestBreakTracks.length ? combinedTracks : bestBreakTracks;
 
         console.info("[break-loop] Escape Pool selection", {
           mode: breakLoopMode,
@@ -1384,6 +1423,7 @@ export async function POST(request: NextRequest) {
           repeatedArtistNorms,
           knownArtistNorms,
         });
+        bestBreakTracks = escapePoolTracks.length > bestBreakTracks.length ? escapePoolTracks : bestBreakTracks;
       }
 
       if (escapePoolTracks.length >= minimumPoolTracks) {
@@ -1403,10 +1443,55 @@ export async function POST(request: NextRequest) {
         });
       });
 
+      if (bestBreakTracks.length >= Math.min(3, counts.total)) {
+        const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used the best non-repeat matches available while your Escape Pool keeps filling in the background.`;
+        return buildResponse(
+          sequencePlaylist(bestBreakTracks.slice(0, counts.total), "build"),
+          intro,
+          requestStr,
+          user.id,
+          cacheKey,
+        );
+      }
+
+      const rescueTracks = await withTimeout(
+        buildFastSearchPlaylist({
+          spotify,
+          requestStr: [breakLoopTarget, genreLock, topArtists, ...modeConfig.queryBoosts, requestStr]
+            .filter(Boolean)
+            .join(" "),
+          allGenres,
+          intent: breakIntent,
+          intensity,
+          targetCount: counts.total,
+          recentSet,
+          knownArtistNorms,
+          avoidKnownArtists: false,
+          blockedTrackIds,
+          blockedTrackNorms,
+        }).catch((err) => {
+          console.warn("[break-loop] Rescue search skipped:", err);
+          return [] as PlaylistTrack[];
+        }),
+        7_000,
+        [] as PlaylistTrack[],
+      );
+
+      if (rescueTracks.length >= Math.min(3, counts.total)) {
+        const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used a fresh Spotify search while your Escape Pool keeps filling in the background.`;
+        return buildResponse(
+          sequencePlaylist(rescueTracks, "build"),
+          intro,
+          requestStr,
+          user.id,
+          cacheKey,
+        );
+      }
+
       return NextResponse.json(
         {
           error:
-            "Your Escape Pool needs more variety before this reset is useful. Sync Spotify once, then try Break My Loop again in a moment.",
+            "Spotify did not return enough playable non-repeat tracks yet. Try a clearer direction like afro house, indie dance, or chill R&B.",
         },
         { status: 503 },
       );

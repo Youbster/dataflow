@@ -49,6 +49,21 @@ export interface EscapePlaylistTrack {
   albumImageUrl: string | null;
 }
 
+interface TopTrackSeed {
+  artist_names: string[] | null;
+  artist_ids: string[] | null;
+  rank: number | null;
+  time_range: string | null;
+}
+
+interface TopArtistSeed {
+  spotify_artist_id: string;
+  artist_name: string;
+  genres: string[] | null;
+  rank: number | null;
+  time_range: string | null;
+}
+
 function normalizeForCompare(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -157,6 +172,42 @@ async function safeUpsertPoolRows(admin: AdminClient, rows: ReturnType<typeof tr
   return { inserted: rows.length };
 }
 
+function deriveArtistSeeds(
+  topArtists: TopArtistSeed[],
+  topTracks: TopTrackSeed[],
+): TopArtistSeed[] {
+  const byArtistId = new Map<string, TopArtistSeed>();
+  const addSeed = (seed: TopArtistSeed) => {
+    const key = seed.spotify_artist_id || normalizeForCompare(seed.artist_name);
+    if (!key) return;
+    const existing = byArtistId.get(key);
+    if (!existing || (seed.rank ?? 999) < (existing.rank ?? 999)) {
+      byArtistId.set(key, seed);
+    }
+  };
+
+  for (const artist of topArtists) addSeed(artist);
+
+  for (const track of topTracks) {
+    const names = track.artist_names ?? [];
+    const ids = track.artist_ids ?? [];
+    for (let index = 0; index < Math.min(names.length, ids.length, 3); index++) {
+      const artistName = names[index];
+      const artistId = ids[index];
+      if (!artistName || !artistId) continue;
+      addSeed({
+        spotify_artist_id: artistId,
+        artist_name: artistName,
+        genres: [],
+        rank: track.rank ?? 999,
+        time_range: track.time_range ?? "top_track",
+      });
+    }
+  }
+
+  return [...byArtistId.values()].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+}
+
 export async function refreshEscapePool(
   userId: string,
   spotify: SpotifyClient,
@@ -208,7 +259,10 @@ export async function refreshEscapePool(
     rows.push(trackToPoolRow(userId, track, "top_track", item.time_range, Math.max(30, 96 - (item.rank ?? 50)), item.time_range === "long_term" ? 22 : 8));
   }
 
-  const artists = (topArtists ?? []).slice(0, 10);
+  const artists = deriveArtistSeeds(
+    ((topArtists ?? []) as TopArtistSeed[]),
+    ((topTracks ?? []) as TopTrackSeed[]),
+  ).slice(0, 10);
   const genres = [...new Set(artists.flatMap((artist) => artist.genres ?? []))].slice(0, 10);
   const artistTopTrackResults = await Promise.allSettled(
     artists.slice(0, 8).map((artist) =>
