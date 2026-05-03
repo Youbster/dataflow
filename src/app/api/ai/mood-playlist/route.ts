@@ -725,9 +725,14 @@ export async function POST(request: NextRequest) {
 
       const blockedTrackIds = new Set<string>();
       const blockedTrackNorms = new Set<string>();
+      const blockedTrackLabels: string[] = [];
       const blockTrack = (trackName: string, artistName: string, id?: string | null) => {
         if (id) blockedTrackIds.add(id);
-        blockedTrackNorms.add(trackIdentity(trackName, artistName));
+        if (trackName && artistName && blockedTrackLabels.length < 40) {
+          const label = `"${trackName}" by ${artistName}`;
+          if (!blockedTrackLabels.includes(label)) blockedTrackLabels.push(label);
+        }
+        if (trackName || artistName) blockedTrackNorms.add(trackIdentity(trackName, artistName));
       };
 
       for (const key of recentSet) {
@@ -785,21 +790,28 @@ export async function POST(request: NextRequest) {
       const addResetTrack = (track: SpotifyTrack, query: string, strict: boolean) => {
         const artistName = track.artists[0]?.name ?? "";
         const artistNorm = normalizeForCompare(artistName);
-        if (!artistNorm) return;
-        if (existingIds.has(track.id) || blockedTrackIds.has(track.id)) return;
-        if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return;
-        if (strict && (knownArtistNorms.has(artistNorm) || repeatedArtistNorms.has(artistNorm))) return;
-        if ((artistPickCounts.get(artistNorm) ?? 0) >= 2) return;
+        if (!artistNorm) return false;
+        if (existingIds.has(track.id) || blockedTrackIds.has(track.id)) return false;
+        if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return false;
+        if (strict && (knownArtistNorms.has(artistNorm) || repeatedArtistNorms.has(artistNorm))) return false;
+        if ((artistPickCounts.get(artistNorm) ?? 0) >= 2) return false;
         existingIds.add(track.id);
         artistPickCounts.set(artistNorm, (artistPickCounts.get(artistNorm) ?? 0) + 1);
         resetCandidates.push({ track, query, strict });
+        return true;
       };
 
+      const resetQueryStop = new Set(["break", "spotify", "loop", "reset", "refresh", "playlist", "music", "song", "songs", "track", "tracks"]);
+      const cleanResetQuery = (query: string) =>
+        normalizeToken(query)
+          .split(/\s+/)
+          .filter((token) => token.length > 2 && !resetQueryStop.has(token))
+          .join(" ");
       const tasteQueries = uniqueStrings(
         [
           genreLock ?? "",
           ...breakIntent.genres,
-          ...breakIntent.keywords.slice(0, 5),
+          ...breakIntent.keywords.map(cleanResetQuery),
           ...allGenres.slice(0, 8),
           genreStr.split(",")[0] ?? "",
           "indie dance",
@@ -828,6 +840,55 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (resetCandidates.length < Math.min(counts.total, 8)) {
+        const askFor = Math.min(20, counts.total * 2);
+        const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
+
+REQUEST: "${requestStr}"${intensityStr}
+
+LISTENER TASTE DNA:
+- Core genres: ${genreStr || "varied"}
+- Favorite artists to use only as reference, not suggestions: ${topArtists || "none"}
+- Hard-block these tracks completely: ${blockedTrackLabels.join("; ") || "none"}${constraintsStr}
+
+Suggest ${askFor} real Spotify tracks that are taste-adjacent but outside the blocked list. Prefer artists one step away from their taste, not their obvious top artists.
+
+Return ONLY valid JSON:
+{
+  "tracks": [
+    { "track": "Exact Spotify track title", "artist": "Exact Spotify artist name", "reason": "short reason" }
+  ]
+}`;
+
+        try {
+          const aiReset = await getOpenAI().chat.completions.create({
+            model: FAST_MODEL,
+            max_tokens: 900,
+            messages: [
+              { role: "system", content: MUSIC_EXPERT_SYSTEM },
+              { role: "user", content: resetPrompt },
+            ],
+          });
+          const text = aiReset.choices[0].message.content ?? "";
+          const match = text.match(/\{[\s\S]*\}/)?.[0];
+          const suggestions = match
+            ? (JSON.parse(match) as { tracks?: { track: string; artist: string; reason?: string }[] }).tracks ?? []
+            : [];
+          const resolved = await Promise.allSettled(
+            suggestions.slice(0, askFor).map((suggestion) => spotify.findTrack(suggestion.track, suggestion.artist))
+          );
+          for (const result of resolved) {
+            if (resetCandidates.length >= counts.total) break;
+            if (result.status !== "fulfilled" || !result.value) continue;
+            if (!addResetTrack(result.value, "curated reset", true)) {
+              addResetTrack(result.value, "curated reset", false);
+            }
+          }
+        } catch (err) {
+          console.error("[break-loop] AI reset fallback failed:", err);
+        }
+      }
+
       // Relax artist familiarity only after the hard track blockers have done
       // their job. This keeps niche tastes from returning too few songs while
       // still refusing recent/top-track repeats.
@@ -835,6 +896,17 @@ export async function POST(request: NextRequest) {
         for (const query of strictQueries) {
           if (resetCandidates.length >= counts.total) break;
           const result = await spotify.searchTracks(query, 25).catch(() => null);
+          for (const track of result?.tracks?.items ?? []) {
+            if (resetCandidates.length >= counts.total) break;
+            addResetTrack(track, query, false);
+          }
+        }
+      }
+
+      if (resetCandidates.length === 0) {
+        for (const query of ["new music friday", "fresh finds", "indie pop", "dance hits", "alternative hits", "electronic hits"]) {
+          if (resetCandidates.length >= counts.total) break;
+          const result = await spotify.searchTracks(query, 50).catch(() => null);
           for (const track of result?.tracks?.items ?? []) {
             if (resetCandidates.length >= counts.total) break;
             addResetTrack(track, query, false);
