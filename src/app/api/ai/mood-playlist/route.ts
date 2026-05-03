@@ -24,6 +24,42 @@ interface PlaylistTrack {
   albumImageUrl: string | null;
 }
 
+interface PlaylistIntent {
+  mood: string[];
+  activity: string | null;
+  energy: "low" | "mid" | "high";
+  freshness: "familiar" | "mixed" | "fresh";
+  genres: string[];
+  avoid: string[];
+  keywords: string[];
+  flow: "steady" | "build" | "cooldown" | "peak" | null;
+}
+
+interface CandidateTrack {
+  track: SpotifyTrack;
+  era: "recent" | "classic";
+}
+
+interface ScoreContext {
+  intent: PlaylistIntent;
+  requestTokens: Set<string>;
+  genreTokens: Set<string>;
+  knownArtistNorms: Set<string>;
+  artistGenreMap: Map<string, string[]>;
+  playCounts7d: Record<string, number>;
+}
+
+interface CachedPlaylist {
+  intro: string;
+  tracks: PlaylistTrack[];
+  playlistId: null;
+  expiresAt: number;
+}
+
+const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
+const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
+const PLAYLIST_CACHE_MAX_ENTRIES = 80;
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function trackCount(sessionMinutes: number) {
@@ -31,6 +67,208 @@ function trackCount(sessionMinutes: number) {
   if (sessionMinutes <= 20) return { total: 6,  anchor: 2, groove: 2, discovery: 2 };
   if (sessionMinutes <= 60) return { total: 18, anchor: 3, groove: 11, discovery: 4 };
   return                           { total: 30, anchor: 4, groove: 18, discovery: 8 };
+}
+
+function normalizeForCompare(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function uniqueStrings(values: string[], limit = 12): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const cleaned = normalizeToken(value);
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    out.push(cleaned);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function tokensFromText(text: string): string[] {
+  const stop = new Set([
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "give", "great", "i", "in", "into", "is", "it", "like", "make", "me",
+    "more", "music", "my", "of", "on", "or", "playlist", "some", "song",
+    "songs", "that", "the", "this", "to", "track", "tracks", "with",
+  ]);
+
+  return uniqueStrings(
+    normalizeToken(text)
+      .split(/\s+/)
+      .filter((token) => token.length > 2 && !stop.has(token)),
+    16
+  );
+}
+
+function buildFallbackIntent(
+  requestStr: string,
+  familiarity: "familiar" | "mixed" | "fresh",
+  intensity: "low" | "mid" | "high",
+  genreLock: string | null,
+  artistLock: string | null,
+): PlaylistIntent {
+  const requestTokens = tokensFromText(requestStr);
+  const genres = genreLock ? tokensFromText(genreLock) : [];
+  const artistTokens = artistLock ? tokensFromText(artistLock) : [];
+
+  return {
+    mood: requestTokens.slice(0, 4),
+    activity: null,
+    energy: intensity,
+    freshness: familiarity,
+    genres,
+    avoid: [],
+    keywords: uniqueStrings([...requestTokens, ...genres, ...artistTokens], 14),
+    flow: intensity === "high" ? "build" : intensity === "low" ? "cooldown" : "steady",
+  };
+}
+
+function coerceIntent(
+  value: unknown,
+  fallback: PlaylistIntent,
+): PlaylistIntent {
+  if (!value || typeof value !== "object") return fallback;
+  const obj = value as Record<string, unknown>;
+  const energy = obj.energy === "low" || obj.energy === "high" || obj.energy === "mid"
+    ? obj.energy
+    : fallback.energy;
+  const freshness =
+    obj.freshness === "familiar" || obj.freshness === "mixed" || obj.freshness === "fresh"
+      ? obj.freshness
+      : fallback.freshness;
+  const flow =
+    obj.flow === "steady" || obj.flow === "build" || obj.flow === "cooldown" || obj.flow === "peak"
+      ? obj.flow
+      : fallback.flow;
+  const asStringArray = (input: unknown, fallbackValues: string[]) =>
+    Array.isArray(input)
+      ? uniqueStrings(input.filter((v): v is string => typeof v === "string"))
+      : fallbackValues;
+
+  return {
+    mood: asStringArray(obj.mood, fallback.mood),
+    activity: typeof obj.activity === "string" && obj.activity.trim() ? normalizeToken(obj.activity) : fallback.activity,
+    energy,
+    freshness,
+    genres: asStringArray(obj.genres, fallback.genres),
+    avoid: asStringArray(obj.avoid, fallback.avoid),
+    keywords: uniqueStrings(
+      [
+        ...asStringArray(obj.keywords, fallback.keywords),
+        ...asStringArray(obj.mood, fallback.mood),
+        ...asStringArray(obj.genres, fallback.genres),
+      ],
+      16
+    ),
+    flow,
+  };
+}
+
+async function parsePlaylistIntent(
+  requestStr: string,
+  familiarity: "familiar" | "mixed" | "fresh",
+  intensity: "low" | "mid" | "high",
+  constraintsStr: string,
+  genreLock: string | null,
+  artistLock: string | null,
+): Promise<PlaylistIntent> {
+  const fallback = buildFallbackIntent(requestStr, familiarity, intensity, genreLock, artistLock);
+
+  try {
+    const aiPromise = openai.chat.completions.create({
+      model: FAST_MODEL,
+      max_tokens: 220,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You convert playlist requests into compact JSON. Return only valid JSON with no markdown.",
+        },
+        {
+          role: "user",
+          content: `Request: "${requestStr}"
+Familiarity: ${familiarity}
+Intensity: ${intensity}${constraintsStr}
+
+Return this exact shape:
+{
+  "mood": ["short mood words"],
+  "activity": "activity or null",
+  "energy": "low|mid|high",
+  "freshness": "familiar|mixed|fresh",
+  "genres": ["genre hints"],
+  "avoid": ["things to avoid"],
+  "keywords": ["search/scoring words"],
+  "flow": "steady|build|cooldown|peak"
+}`,
+        },
+      ],
+    });
+
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Intent parse timed out")), 2_500)
+    );
+    const response = await Promise.race([aiPromise, timeout]);
+    const text = response.choices[0].message.content ?? "";
+    const match = text.match(/\{[\s\S]*\}/)?.[0];
+    if (!match) return fallback;
+    return coerceIntent(JSON.parse(match), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildCacheKey(
+  userId: string,
+  body: {
+    prompt: string;
+    sessionMinutes: number;
+    familiarity: string;
+    intensity: string;
+    vocals: string;
+    language: string;
+    genreLock: string | null;
+    artistLock: string | null;
+  },
+): string {
+  return JSON.stringify({
+    userId,
+    prompt: normalizeToken(body.prompt),
+    sessionMinutes: body.sessionMinutes,
+    familiarity: body.familiarity,
+    intensity: body.intensity,
+    vocals: body.vocals,
+    language: body.language,
+    genreLock: normalizeToken(body.genreLock ?? ""),
+    artistLock: normalizeToken(body.artistLock ?? ""),
+  });
+}
+
+function getCachedPlaylist(cacheKey: string): CachedPlaylist | null {
+  const cached = PLAYLIST_CACHE.get(cacheKey);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    PLAYLIST_CACHE.delete(cacheKey);
+    return null;
+  }
+  return cached;
+}
+
+function setCachedPlaylist(cacheKey: string, value: Omit<CachedPlaylist, "expiresAt">) {
+  if (PLAYLIST_CACHE.size >= PLAYLIST_CACHE_MAX_ENTRIES) {
+    const oldestKey = PLAYLIST_CACHE.keys().next().value as string | undefined;
+    if (oldestKey) PLAYLIST_CACHE.delete(oldestKey);
+  }
+  PLAYLIST_CACHE.set(cacheKey, {
+    ...value,
+    expiresAt: Date.now() + PLAYLIST_CACHE_TTL_MS,
+  });
 }
 
 function detectNonEnglishLanguages(genres: string[]): string[] {
@@ -45,6 +283,148 @@ function detectNonEnglishLanguages(genres: string[]): string[] {
   if (/turkish|arabesk/.test(joined))                                     detected.push("Turkish");
   if (/portuguese|mpb|brazilian|samba|bossa/.test(joined))                detected.push("Portuguese/Brazilian");
   return detected;
+}
+
+function scoreCandidateTrack(candidate: CandidateTrack, ctx: ScoreContext): number {
+  const { track, era } = candidate;
+  const artistName = track.artists[0]?.name ?? "";
+  const key = `${track.name}|||${artistName}`;
+  const artistNorm = normalizeForCompare(artistName);
+  const haystack = normalizeToken(
+    `${track.name} ${artistName} ${track.album.name} ${(ctx.artistGenreMap.get(artistNorm) ?? []).join(" ")}`
+  );
+  const haystackTokens = new Set(haystack.split(/\s+/).filter(Boolean));
+
+  let score = era === "recent" ? 26 : 18;
+
+  const popularity = track.popularity ?? 50;
+  if (popularity >= 35 && popularity <= 82) score += 12;
+  else if (popularity > 82 && ctx.intent.freshness === "fresh") score -= 8;
+  else if (popularity < 20) score -= 4;
+
+  for (const token of ctx.requestTokens) {
+    if (haystackTokens.has(token)) score += 8;
+    else if (haystack.includes(token)) score += 4;
+  }
+
+  for (const token of ctx.intent.keywords) {
+    if (haystackTokens.has(token)) score += 7;
+    else if (haystack.includes(token)) score += 3;
+  }
+
+  for (const token of ctx.genreTokens) {
+    if (haystack.includes(token)) score += 9;
+  }
+
+  const avoidTokens = new Set(ctx.intent.avoid.flatMap(tokensFromText));
+  for (const token of avoidTokens) {
+    if (haystack.includes(token)) score -= 14;
+  }
+
+  const knownArtist = ctx.knownArtistNorms.has(artistNorm);
+  if (ctx.intent.freshness === "familiar" && knownArtist) score += 10;
+  if (ctx.intent.freshness === "mixed" && era === "classic") score += 5;
+
+  const lowSignals = /\b(acoustic|piano|ambient|sleep|slow|soft|lullaby|intro)\b/;
+  const highSignals = /\b(club|dance|remix|edit|party|workout|hype|banger)\b/;
+  if (ctx.intent.energy === "low") {
+    if (lowSignals.test(haystack)) score += 6;
+    if (highSignals.test(haystack)) score -= 8;
+  }
+  if (ctx.intent.energy === "high") {
+    if (highSignals.test(haystack)) score += 6;
+    if (lowSignals.test(haystack)) score -= 8;
+  }
+
+  score -= Math.min(24, (ctx.playCounts7d[key] ?? 0) * 4);
+
+  return score;
+}
+
+function selectRankedTracks(
+  candidates: CandidateTrack[],
+  target: number,
+  ctx: ScoreContext,
+  blockedIds: Set<string> = new Set(),
+): SpotifyTrack[] {
+  const picked: SpotifyTrack[] = [];
+  const artistCounts = new Map<string, number>();
+  const ranked = candidates
+    .filter((candidate) => !blockedIds.has(candidate.track.id))
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      score: scoreCandidateTrack(candidate, ctx),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  for (const item of ranked) {
+    if (picked.length >= target) break;
+    const artistNorm = normalizeForCompare(item.candidate.track.artists[0]?.name ?? "");
+    const count = artistCounts.get(artistNorm) ?? 0;
+    if (count >= 2) continue;
+    picked.push(item.candidate.track);
+    blockedIds.add(item.candidate.track.id);
+    artistCounts.set(artistNorm, count + 1);
+  }
+
+  if (picked.length < target) {
+    for (const item of ranked) {
+      if (picked.length >= target) break;
+      if (blockedIds.has(item.candidate.track.id)) continue;
+      picked.push(item.candidate.track);
+      blockedIds.add(item.candidate.track.id);
+    }
+  }
+
+  return picked;
+}
+
+function sequencePlaylist(tracks: PlaylistTrack[], flow: PlaylistIntent["flow"]): PlaylistTrack[] {
+  const anchors = tracks.filter((t) => t.section === "anchor");
+  const grooves = tracks.filter((t) => t.section === "groove");
+  const discoveries = tracks.filter((t) => t.section === "discovery");
+  const ordered: PlaylistTrack[] = [];
+
+  if (flow === "peak") {
+    ordered.push(...anchors.slice(0, 1));
+    ordered.push(...discoveries.slice(0, 1));
+    ordered.push(...grooves);
+    ordered.push(...anchors.slice(1));
+    ordered.push(...discoveries.slice(1));
+  } else if (flow === "cooldown") {
+    ordered.push(...anchors);
+    ordered.push(...grooves);
+    ordered.push(...discoveries);
+  } else {
+    ordered.push(...anchors.slice(0, 2));
+    let discoveryIndex = 0;
+    grooves.forEach((track, index) => {
+      ordered.push(track);
+      if ((index + 1) % 4 === 0 && discoveryIndex < discoveries.length) {
+        ordered.push(discoveries[discoveryIndex]);
+        discoveryIndex++;
+      }
+    });
+    ordered.push(...anchors.slice(2));
+    ordered.push(...discoveries.slice(discoveryIndex));
+  }
+
+  for (let i = 1; i < ordered.length; i++) {
+    if (normalizeForCompare(ordered[i].artistName) !== normalizeForCompare(ordered[i - 1].artistName)) continue;
+    const swapIndex = ordered.findIndex(
+      (track, index) =>
+        index > i &&
+        normalizeForCompare(track.artistName) !== normalizeForCompare(ordered[i - 1].artistName)
+    );
+    if (swapIndex > i) {
+      const current = ordered[i];
+      ordered[i] = ordered[swapIndex];
+      ordered[swapIndex] = current;
+    }
+  }
+
+  return ordered;
 }
 
 /** Maps a SpotifyTrack directly to a PlaylistTrack — no extra API calls needed. */
@@ -157,6 +537,25 @@ export async function POST(request: NextRequest) {
 
   const counts  = trackCount(sessionMinutes);
   const spotify = createSpotifyClient(user.id);
+  const cacheKey = buildCacheKey(user.id, {
+    prompt: userPrompt,
+    sessionMinutes,
+    familiarity,
+    intensity,
+    vocals,
+    language,
+    genreLock,
+    artistLock,
+  });
+  const cached = getCachedPlaylist(cacheKey);
+  if (cached) {
+    return NextResponse.json({
+      intro: cached.intro,
+      tracks: cached.tracks,
+      playlistId: null,
+      cached: true,
+    });
+  }
 
   try {
     // ── Fetch user data — direct Spotify calls, no Supabase data queries ──────
@@ -230,6 +629,7 @@ export async function POST(request: NextRequest) {
 
     const requestStr = userPrompt.trim() || "Discover great music matching my taste";
     const hasData    = shortCandidates.length > 0 || longCandidates.length > 0;
+    const fallbackIntent = buildFallbackIntent(requestStr, familiarity, intensity, genreLock, artistLock);
 
     // ── FRESH / DISCOVERY MODE ────────────────────────────────────────────────
     //
@@ -244,8 +644,9 @@ export async function POST(request: NextRequest) {
     //   → tracks genuinely fit the requested vibe, not just an artist's biggest hit
     if (familiarity === "fresh" || !hasData) {
       const targetCount = familiarity === "fresh" ? counts.total : counts.discovery;
-      // Ask for 2× needed, capped at 20 — buffer absorbs the ~15% that won't resolve
-      const askFor = Math.min(targetCount * 2, 20);
+      // Ask for a capped buffer so free-tier Vercel/OpenAI usage stays predictable.
+      // Spotify search fallbacks can still fill longer playlists if needed.
+      const askFor = Math.min(Math.ceil(targetCount * 1.5), 16);
 
       const recentTracksList = [...recentSet].slice(0, 15)
         .map((k) => {
@@ -309,7 +710,7 @@ Return ONLY valid JSON (no markdown, no extra text):
       console.log(`[fresh-discovery] AI suggested ${aiTracks.length} tracks — resolving via findTrack...`);
 
       // Resolve all suggestions in parallel using findTrack (3 strategies + fuzzy matching)
-      let tracks = await resolveDiscoveryTracks(aiTracks, recentSet, freshKnownNorms, spotify);
+      const tracks = await resolveDiscoveryTracks(aiTracks, recentSet, freshKnownNorms, spotify);
 
       console.log(`[fresh-discovery] findTrack resolved: ${tracks.length}/${aiTracks.length}`);
 
@@ -402,103 +803,65 @@ Return ONLY valid JSON (no markdown, no extra text):
         );
       }
 
-      return buildResponse(tracks.slice(0, targetCount), freshResult.intro, userPrompt, user.id);
+      const sequenced = sequencePlaylist(tracks.slice(0, targetCount), fallbackIntent.flow);
+      return buildResponse(sequenced, freshResult.intro, userPrompt, user.id, cacheKey);
     }
 
-    // ── CURATOR MODE — AI-selected tracks from your library ──────────────────
+    // ── CURATOR MODE — free-tier hybrid ranking ───────────────────────────────
     //
-    // Previous approach: always picked the top-ranked tracks regardless of
-    // mood → the same 3 anchor tracks appeared in every playlist.
-    //
-    // New approach: build a pool of up to 40 candidates from your library,
-    // let gpt-4o-mini pick which ones best fit the mood/vibe. Falls back to
-    // the rank-order algorithm if the AI call fails.
-    // Added latency: ~400 ms (gpt-4o-mini returning just indices).
+    // One tiny AI call parses the user's vague vibe into structured intent.
+    // Deterministic scoring then ranks verified Spotify tracks locally. This is
+    // cheaper, faster, and more debuggable than asking AI to pick every track.
 
     const anchorTarget    = shortCandidates.length > 0 ? counts.anchor : 0;
     const grooveTarget    = longCandidates.length > 0
       ? Math.min(counts.groove, longCandidates.length) : 0;
     const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
-    const needed          = anchorTarget + grooveTarget;
 
     // Build known-artist set for discovery filtering
     const knownArtistNorms = new Set(
       topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
     );
 
-    // Deduplicated pool: recent tracks first (they become anchors), then
-    // all-time favourites. Cap at 40 so the AI prompt stays small.
-    const seenIds = new Set<string>();
-    const pool: Array<{ track: SpotifyTrack; era: "recent" | "classic" }> = [];
-    for (const t of shortCandidates) {
-      if (pool.length >= 20) break;
-      if (!seenIds.has(t.id)) { seenIds.add(t.id); pool.push({ track: t, era: "recent" }); }
+    const intent = await parsePlaylistIntent(
+      requestStr,
+      familiarity,
+      intensity,
+      constraintsStr,
+      genreLock,
+      artistLock,
+    );
+    const artistGenreMap = new Map<string, string[]>();
+    for (const artist of shortArtists) {
+      artistGenreMap.set(normalizeForCompare(artist.name), artist.genres ?? []);
     }
-    for (const t of longCandidates) {
-      if (pool.length >= 40) break;
-      if (!seenIds.has(t.id)) { seenIds.add(t.id); pool.push({ track: t, era: "classic" }); }
-    }
+    const requestTokens = new Set(tokensFromText(requestStr));
+    const genreTokens = new Set([
+      ...tokensFromText(genreStr),
+      ...intent.genres.flatMap(tokensFromText),
+    ]);
+    const scoreContext: ScoreContext = {
+      intent,
+      requestTokens,
+      genreTokens,
+      knownArtistNorms,
+      artistGenreMap,
+      playCounts7d,
+    };
 
-    let anchorRows: SpotifyTrack[] = [];
-    let grooveRows: SpotifyTrack[] = [];
-
-    if (pool.length > 0 && needed > 0) {
-      // ── AI selection — ask which tracks fit the mood best ──────────────────
-      let aiIndices: number[] | null = null;
-
-      try {
-        const trackList = pool
-          .map((p, i) => `${i}: "${p.track.name}" – ${p.track.artists[0]?.name ?? "Unknown"}`)
-          .join("\n");
-
-        const selAI = await openai.chat.completions.create({
-          model: FAST_MODEL,
-          max_tokens: 160,
-          messages: [
-            {
-              role: "system",
-              content: "You are a DJ. Given a numbered track list, return ONLY a JSON array of indices.",
-            },
-            {
-              role: "user",
-              content:
-                `Pick the ${needed} tracks from the list below that best fit this vibe: "${requestStr}"${intensityStr}${constraintsStr}\n\n` +
-                `${trackList}\n\nReturn ONLY a JSON array like [0, 4, 7, …] — no explanation.`,
-            },
-          ],
-        });
-
-        const raw   = selAI.choices[0].message.content ?? "";
-        const match = raw.match(/\[[^\]]+\]/)?.[0];
-        if (match) {
-          const parsed = JSON.parse(match) as unknown[];
-          aiIndices = parsed
-            .filter((v): v is number => typeof v === "number" && v >= 0 && v < pool.length)
-            .slice(0, needed);
-        }
-      } catch {
-        // AI failed — fall through to algorithmic fallback below
-      }
-
-      if (aiIndices && aiIndices.length >= Math.min(needed, 3)) {
-        // Use AI-selected tracks. Preserve era distinction: first anchorTarget
-        // items become anchors, remainder become groove. Sort AI picks to put
-        // recent-era entries first so anchors skew toward what you've been playing.
-        const sorted = [...aiIndices].sort((a, b) => {
-          const eraA = pool[a].era === "recent" ? 0 : 1;
-          const eraB = pool[b].era === "recent" ? 0 : 1;
-          return eraA - eraB;
-        });
-        anchorRows = sorted.slice(0, anchorTarget).map((i) => pool[i].track);
-        grooveRows = sorted.slice(anchorTarget, needed).map((i) => pool[i].track);
-      } else {
-        // Algorithmic fallback: shuffle both pools for variety
-        const shuffledShort = [...shortCandidates].sort(() => Math.random() - 0.5);
-        const shuffledLong  = [...longCandidates].sort(() => Math.random() - 0.5);
-        anchorRows = shuffledShort.slice(0, anchorTarget);
-        grooveRows = shuffledLong.slice(0, grooveTarget);
-      }
-    }
+    const blockedIds = new Set<string>();
+    const anchorRows = selectRankedTracks(
+      shortCandidates.slice(0, 30).map((track) => ({ track, era: "recent" })),
+      anchorTarget,
+      scoreContext,
+      blockedIds,
+    );
+    const grooveRows = selectRankedTracks(
+      longCandidates.slice(0, 50).map((track) => ({ track, era: "classic" })),
+      grooveTarget,
+      scoreContext,
+      blockedIds,
+    );
 
     // Discovery portion: search Spotify for tracks matching the vibe that
     // aren't from artists the user already knows.
@@ -506,7 +869,9 @@ Return ONLY valid JSON (no markdown, no extra text):
     // IMPORTANT: Spotify search matches track/artist/album names — it does NOT
     // understand natural language. "Discover great music matching my taste"
     // returns 0 results. Use the user's actual words (first 4) or top genre.
-    const discoveryQuery = userPrompt.trim()
+    const discoveryQuery = intent.keywords.length > 0
+      ? intent.keywords.slice(0, 3).join(" ")
+      : userPrompt.trim()
       ? userPrompt.trim().split(/\s+/).slice(0, 4).join(" ")
       : genreStr.split(",")[0]?.trim() || allGenres[0] || "indie";
 
@@ -537,14 +902,14 @@ Return ONLY valid JSON (no markdown, no extra text):
 
     const anchorTracks = anchorRows.map((t) => resolveSpotifyTrack(t, "anchor", "Picked for your vibe"));
     const grooveTracks = grooveRows.map((t) => resolveSpotifyTrack(t, "groove", "Fits perfectly with your mood"));
-    const allTracks    = [...anchorTracks, ...grooveTracks, ...discoveryTracks];
+    const allTracks    = sequencePlaylist([...anchorTracks, ...grooveTracks, ...discoveryTracks], intent.flow);
 
     const moodLabel = requestStr.length < 60 ? `"${requestStr}"` : "your current vibe";
     const intro = familiarity === "familiar"
       ? `Your comfort playlist — the tracks that fit ${moodLabel}, ready to play.`
       : `Built for ${moodLabel}: tracks from your library that match the vibe${discoveryTracks.length > 0 ? ", plus a few fresh finds" : ""}.`;
 
-    return buildResponse(allTracks, intro, userPrompt, user.id);
+    return buildResponse(allTracks, intro, userPrompt, user.id, cacheKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to generate playlist";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -563,8 +928,11 @@ function buildResponse(
   intro: string,
   promptUsed: string,
   userId: string,
+  cacheKey?: string,
 ): NextResponse {
-  const response = NextResponse.json({ intro, tracks, playlistId: null });
+  const body = { intro, tracks, playlistId: null };
+  if (cacheKey) setCachedPlaylist(cacheKey, body);
+  const response = NextResponse.json(body);
 
   after(async () => {
     try {
