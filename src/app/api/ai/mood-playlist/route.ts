@@ -427,6 +427,41 @@ function sequencePlaylist(tracks: PlaylistTrack[], flow: PlaylistIntent["flow"])
   return ordered;
 }
 
+function buildFreshSearchQueries(
+  requestStr: string,
+  allGenres: string[],
+  intent: PlaylistIntent,
+  intensity: "low" | "mid" | "high",
+): string[] {
+  const requestTokens = tokensFromText(requestStr);
+  const genreQueries = allGenres
+    .slice(0, 5)
+    .map((g) => g.replace(/-/g, " ").split(/\s+/).slice(0, 3).join(" ").trim());
+  const queries = [
+    intent.keywords.slice(0, 3).join(" "),
+    requestTokens.slice(0, 2).join(" "),
+    requestTokens[0] ?? "",
+    ...genreQueries,
+  ];
+
+  if (requestTokens.includes("house") || intent.genres.some((g) => g.includes("house"))) {
+    queries.push(
+      intensity === "low" ? "deep house" : "house",
+      intensity === "high" ? "workout house" : "deep house",
+      "tech house",
+      "dance house"
+    );
+  }
+
+  if (requestTokens.includes("workout") || intent.activity === "workout") {
+    queries.push("workout dance", "gym house", "dance");
+  }
+
+  queries.push("dance", "indie dance", "electronic", "alternative");
+
+  return queries.filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i);
+}
+
 /** Maps a SpotifyTrack directly to a PlaylistTrack — no extra API calls needed. */
 function resolveSpotifyTrack(
   t: SpotifyTrack,
@@ -647,6 +682,14 @@ export async function POST(request: NextRequest) {
       // Ask for a capped buffer so free-tier Vercel/OpenAI usage stays predictable.
       // Spotify search fallbacks can still fill longer playlists if needed.
       const askFor = Math.min(Math.ceil(targetCount * 1.5), 16);
+      const intent = await parsePlaylistIntent(
+        requestStr,
+        familiarity,
+        intensity,
+        constraintsStr,
+        genreLock,
+        artistLock,
+      );
 
       const recentTracksList = [...recentSet].slice(0, 15)
         .map((k) => {
@@ -721,14 +764,10 @@ Return ONLY valid JSON (no markdown, no extra text):
       if (tracks.length < targetCount) {
         const existingIds = new Set(tracks.map((t) => t.spotifyTrackId));
 
-        // Tier-1 queries: try user prompt words, then each of the top 3 genres
-        const promptWords = userPrompt.trim().split(/\s+/).slice(0, 4).join(" ").trim();
-        const tierQueries = [
-          promptWords,
-          ...allGenres.slice(0, 3).map((g) => g.replace(/-/g, " ").split(" ").slice(0, 2).join(" ").trim()),
-          "indie",     // broad reliable fallback
-          "alternative", // another broad fallback
-        ].filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i); // deduplicate, remove empty
+        // Tier-1 queries: use normalized music terms, genre hints, and safe
+        // electronic/dance fallbacks. Spotify search matches names, not prose.
+        const tierQueries = buildFreshSearchQueries(requestStr, allGenres, intent, intensity);
+        const fallbackErrors: string[] = [];
 
         for (const query of tierQueries) {
           if (tracks.length >= targetCount) break;
@@ -781,8 +820,26 @@ Return ONLY valid JSON (no markdown, no extra text):
               }
             }
           } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            fallbackErrors.push(`${query}: ${message}`);
             console.error(`[fresh-discovery] fallback "${query}" error:`, err);
           }
+        }
+
+        if (tracks.length === 0 && fallbackErrors.length > 0) {
+          return NextResponse.json(
+            {
+              error: "Spotify search failed while finding fresh tracks. Reconnect Spotify, then try again.",
+              debug: {
+                aiTracksCount: aiTracks.length,
+                topArtists: topArtists || "none",
+                genres: genreStr || "none",
+                userPrompt: userPrompt || "(empty)",
+                fallbackErrors: fallbackErrors.slice(0, 3),
+              },
+            },
+            { status: 502 }
+          );
         }
       }
 
@@ -803,7 +860,7 @@ Return ONLY valid JSON (no markdown, no extra text):
         );
       }
 
-      const sequenced = sequencePlaylist(tracks.slice(0, targetCount), fallbackIntent.flow);
+      const sequenced = sequencePlaylist(tracks.slice(0, targetCount), intent.flow ?? fallbackIntent.flow);
       return buildResponse(sequenced, freshResult.intro, userPrompt, user.id, cacheKey);
     }
 
