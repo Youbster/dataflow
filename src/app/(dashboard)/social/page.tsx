@@ -20,11 +20,22 @@ import Link from "next/link";
 import { toast } from "sonner";
 import type { UserProfile } from "@/types/database";
 
+interface SocialSearchProfile {
+  id: string;
+  display_name: string;
+  username: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  isFollowing: boolean;
+}
+
 export default function SocialPage() {
   const [following, setFollowing] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
+  const [searchResults, setSearchResults] = useState<SocialSearchProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -56,16 +67,26 @@ export default function SocialPage() {
   }
 
   async function handleSearch() {
-    if (!searchQuery.trim()) return;
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("user_profiles")
-      .select("*")
-      .eq("is_public", true)
-      .ilike("username", `%${searchQuery}%`)
-      .limit(10);
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchResults([]);
+      setHasSearched(false);
+      return;
+    }
 
-    setSearchResults(data || []);
+    setSearching(true);
+    setHasSearched(true);
+    try {
+      const res = await fetch(`/api/social/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      setSearchResults(data.users ?? []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Search failed");
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function handleFollow(targetId: string) {
@@ -81,6 +102,11 @@ export default function SocialPage() {
 
     if (!error) {
       toast.success("Followed!");
+      setSearchResults((results) =>
+        results.map((result) =>
+          result.id === targetId ? { ...result, isFollowing: true } : result
+        )
+      );
       await loadFollowing();
     } else {
       toast.error("Failed to follow");
@@ -122,15 +148,21 @@ export default function SocialPage() {
           <CardContent>
             <div className="flex gap-2">
               <Input
-                placeholder="Search by username..."
+                placeholder="Search username or display name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
-              <Button variant="outline" onClick={handleSearch}>
-                <Search className="w-4 h-4" />
+              <Button variant="outline" onClick={handleSearch} disabled={searching || searchQuery.trim().length < 2}>
+                <Search className={`w-4 h-4 ${searching ? "animate-pulse" : ""}`} />
               </Button>
             </div>
+
+            {hasSearched && searchResults.length === 0 && !searching && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                No public profiles found. They may need to enable public profile in Settings.
+              </p>
+            )}
 
             {searchResults.length > 0 && (
               <div className="mt-3 space-y-2">
@@ -150,16 +182,21 @@ export default function SocialPage() {
                         {user.display_name}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        @{user.username}
+                        {user.username ? `@${user.username}` : "No username set"}
                       </p>
                     </div>
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={user.isFollowing}
                       onClick={() => handleFollow(user.id)}
                     >
-                      <UserPlus className="w-3.5 h-3.5 mr-1" />
-                      Follow
+                      {user.isFollowing ? (
+                        <Check className="w-3.5 h-3.5 mr-1" />
+                      ) : (
+                        <UserPlus className="w-3.5 h-3.5 mr-1" />
+                      )}
+                      {user.isFollowing ? "Following" : "Follow"}
                     </Button>
                   </div>
                 ))}
@@ -227,7 +264,7 @@ export default function SocialPage() {
         ) : following.length === 0 ? (
           <EmptyState
             title="Not following anyone"
-            description="Search for friends by username to follow them and compare tastes!"
+            description="Search for friends by username or display name to follow them and compare tastes!"
           />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
