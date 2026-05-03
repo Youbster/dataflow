@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -14,9 +13,9 @@ import { PlayOnSpotify } from "@/components/shared/play-on-spotify";
 
 // ─── Section labels ───────────────────────────────────────────────────────────
 const SECTION_META = {
-  anchor:    { label: "Setting the tone",    color: "text-primary",     bg: "bg-primary/15",    dot: "bg-primary"     },
-  groove:    { label: "Finding your groove", color: "text-orange-400",  bg: "bg-orange-500/15", dot: "bg-orange-400"  },
-  discovery: { label: "This one's for you",  color: "text-emerald-400", bg: "bg-emerald-500/15",dot: "bg-emerald-400" },
+  anchor:    { label: "Comfort anchors",   color: "text-primary",     bg: "bg-primary/15",    dot: "bg-primary"     },
+  groove:    { label: "Taste bridge",      color: "text-orange-400",  bg: "bg-orange-500/15", dot: "bg-orange-400"  },
+  discovery: { label: "Loop breakers",     color: "text-emerald-400", bg: "bg-emerald-500/15",dot: "bg-emerald-400" },
 };
 
 // ─── Genre chip colour palette ────────────────────────────────────────────────
@@ -54,6 +53,7 @@ const ACTIVITY_CHIPS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Phase = "pick" | "loading" | "result";
 type Vibe  = "familiar" | "mixed" | "fresh";
+type GenerationGoal = "build_vibe" | "break_loop";
 
 interface RecentTrack {
   spotifyTrackId: string;
@@ -87,6 +87,17 @@ interface HomeData {
   recentTopTracks: RecentTrack[];
   vibe: { word: string; sentence: string } | null;
   burnout: { trackName: string; artistName: string; pct: number } | null;
+  loop: {
+    score: number;
+    level: "fresh" | "warming" | "stuck" | "looped";
+    diagnosis: string;
+    repeatRate: number;
+    topTrackShare: number;
+    topArtistShare: number;
+    discoveryRate: number;
+    topRepeatedTrack: { trackName: string; artistName: string; playCount: number } | null;
+    dominantArtist: { artistName: string; playCount: number; pct: number } | null;
+  } | null;
 }
 
 // ─── Pill ─────────────────────────────────────────────────────────────────────
@@ -142,7 +153,8 @@ export default function DashboardPage() {
   const [promptText, setPromptText]   = useState("");
   const [selectedMood, setSelectedMood]         = useState<string | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
-const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
+  const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
+  const [generationGoal, setGenerationGoal] = useState<GenerationGoal>("build_vibe");
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
   const [feedbackMode, setFeedbackMode] = useState(false);
   const [savedToSpotify, setSavedToSpotify] = useState(false);
@@ -161,9 +173,6 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [artistLock, setArtistLock]   = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const router = useRouter();
-
-  useEffect(() => { syncThenLoad(); }, []);
 
   async function syncThenLoad() {
     try {
@@ -180,6 +189,8 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     } catch { /* silent */ }
     finally { setHomeLoading(false); }
   }
+
+  useEffect(() => { syncThenLoad(); }, []);
 
   async function handleSync() {
     setSyncing(true);
@@ -249,10 +260,23 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
 
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
-  async function generate() {
-    if (!canGenerate) return;
+  async function runPlaylistRequest({
+    goal,
+    prompt,
+    familiarity,
+    discovery,
+  }: {
+    goal: GenerationGoal;
+    prompt: string;
+    familiarity: Vibe;
+    discovery: boolean;
+  }) {
     setPhase("loading");
-    setGeneratedDiscovery(vibe === "fresh");
+    setGenerationGoal(goal);
+    setGeneratedDiscovery(discovery);
+    setSavedToSpotify(false);
+    setIsSaving(false);
+    setFeedbackMode(false);
 
     // Abort the request if the server doesn't respond within 28 seconds.
     // Without this, a Vercel timeout sends HTTP 200 headers then never
@@ -266,10 +290,11 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
-          prompt: buildPrompt(),
+          goal,
+          prompt,
           seedTrack: null,
           sessionMinutes: sessionMins,
-          familiarity: vibe,
+          familiarity,
           intensity,
           vocals,
           language,
@@ -303,6 +328,25 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     }
   }
 
+  async function generate() {
+    if (!canGenerate) return;
+    await runPlaylistRequest({
+      goal: "build_vibe",
+      prompt: buildPrompt(),
+      familiarity: vibe,
+      discovery: vibe === "fresh",
+    });
+  }
+
+  async function breakLoop() {
+    await runPlaylistRequest({
+      goal: "break_loop",
+      prompt: promptText.trim() || "Break my Spotify loop",
+      familiarity: "mixed",
+      discovery: false,
+    });
+  }
+
   function reset() {
     setPhase("pick");
     setPromptText("");
@@ -313,6 +357,7 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     setSavedToSpotify(false);
     setIsSaving(false);
     setGeneratedDiscovery(false);
+    setGenerationGoal("build_vibe");
     setTimeout(() => textareaRef.current?.focus(), 100);
   }
 
@@ -323,8 +368,10 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
     setIsSaving(true);
     try {
       const dateLabel = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const label = generatedDiscovery
-        ? `Discoveries — ${dateLabel}`
+      const label = generationGoal === "break_loop"
+        ? "Loop Reset"
+        : generatedDiscovery
+        ? "Discoveries"
         : buildPrompt().slice(0, 40) || "My Playlist";
       const res = await fetch("/api/spotify/playlists", {
         method: "POST",
@@ -356,7 +403,9 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const firstName = homeData?.profile?.displayName?.split(" ")[0] ?? null;
 
   // Label shown in result header
-  const resultLabel = generatedDiscovery
+  const resultLabel = generationGoal === "break_loop"
+    ? "Break My Loop"
+    : generatedDiscovery
     ? null
     : buildPrompt().slice(0, 50) || null;
 
@@ -396,6 +445,53 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
           </div>
         </div>
       ) : null}
+
+      {/* ── Loop Score ─────────────────────────────────────────────────────── */}
+      {!homeLoading && homeData?.loop && (
+        <div className="rounded-2xl border border-border bg-card px-4 py-3 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Loop Score</p>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
+                  homeData.loop.level === "looped"
+                    ? "border-red-500/30 bg-red-500/10 text-red-300"
+                    : homeData.loop.level === "stuck"
+                    ? "border-orange-500/30 bg-orange-500/10 text-orange-300"
+                    : "border-primary/30 bg-primary/10 text-primary"
+                }`}>
+                  {homeData.loop.level}
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1 leading-relaxed">{homeData.loop.diagnosis}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-3xl font-black leading-none">{homeData.loop.score}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">out of 100</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 divide-x divide-border/60 border-y border-border/60 py-2 text-center">
+            <div>
+              <p className="text-sm font-bold">{homeData.loop.repeatRate}%</p>
+              <p className="text-[10px] text-muted-foreground">repeats</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold">{homeData.loop.topArtistShare}%</p>
+              <p className="text-[10px] text-muted-foreground">top artist</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold">{homeData.loop.discoveryRate}%</p>
+              <p className="text-[10px] text-muted-foreground">one-offs</p>
+            </div>
+          </div>
+
+          <Button onClick={breakLoop} disabled={phase === "loading"} className="w-full h-9 text-sm font-semibold">
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Break my loop
+          </Button>
+        </div>
+      )}
 
       {/* ── Generator card ─────────────────────────────────────────────────── */}
       <div className="rounded-3xl border border-border bg-card">
@@ -602,9 +698,17 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
               <Loader2 className={`w-7 h-7 animate-spin ${generatedDiscovery ? "text-violet-400" : "text-primary"}`} />
             </div>
             <div>
-              <p className="font-bold text-lg">{generatedDiscovery ? "Hunting discoveries…" : "Building your vibe…"}</p>
+              <p className="font-bold text-lg">
+                {generationGoal === "break_loop"
+                  ? "Breaking your loop…"
+                  : generatedDiscovery
+                  ? "Hunting discoveries…"
+                  : "Building your vibe…"}
+              </p>
               <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-                {generatedDiscovery
+                {generationGoal === "break_loop"
+                  ? "Avoiding recent repeats, bringing back forgotten taste, and finding fresh edges"
+                  : generatedDiscovery
                   ? "Scanning your taste DNA for artists you've never heard"
                   : "Reading your taste, blocking overplayed songs, finding the right picks"}
               </p>
@@ -621,12 +725,17 @@ const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                      {generationGoal === "break_loop" && (
+                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-primary shrink-0">
+                          <RefreshCw className="w-3 h-3" /> Loop Reset
+                        </span>
+                      )}
                       {generatedDiscovery && (
                         <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-violet-400 shrink-0">
                           <Telescope className="w-3 h-3" /> Discovery
                         </span>
                       )}
-                      {resultLabel && !generatedDiscovery && (
+                      {resultLabel && generationGoal !== "break_loop" && !generatedDiscovery && (
                         <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest truncate max-w-[180px]">
                           &ldquo;{resultLabel.length > 50 ? resultLabel.slice(0, 50) + "…" : resultLabel}&rdquo;
                         </span>

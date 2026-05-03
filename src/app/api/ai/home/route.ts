@@ -4,6 +4,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM, buildTasteProfile } from "@/lib/claude/prompts";
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export async function GET() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -48,6 +52,60 @@ export async function GET() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 3)
       .map(t => ({ spotifyTrackId: t.id, trackName: t.name, artistName: t.artist, albumImageUrl: t.img, playCount: t.count }));
+
+    // Loop Score: a deterministic fatigue signal based on repeats, artist
+    // concentration, and how much of the week was one-off exploration.
+    const total7d = plays7d.length;
+    const uniqueTrackCount = Object.keys(trackCounts).length;
+    const topRepeatedTrack = Object.values(trackCounts).sort((a, b) => b.count - a.count)[0] ?? null;
+    const artistCounts: Record<string, number> = {};
+    for (const p of plays7d) {
+      const artistName = p.artist_names?.[0] ?? "";
+      if (!artistName) continue;
+      artistCounts[artistName] = (artistCounts[artistName] ?? 0) + 1;
+    }
+    const dominantArtistEntry = Object.entries(artistCounts).sort((a, b) => b[1] - a[1])[0] ?? null;
+    const repeatRate = total7d > 0 ? Math.round((1 - uniqueTrackCount / total7d) * 100) : 0;
+    const topTrackShare = total7d > 0 && topRepeatedTrack ? Math.round((topRepeatedTrack.count / total7d) * 100) : 0;
+    const topArtistShare = total7d > 0 && dominantArtistEntry ? Math.round((dominantArtistEntry[1] / total7d) * 100) : 0;
+    const discoveryRate = total7d > 0
+      ? Math.round((Object.values(trackCounts).filter((t) => t.count === 1).length / total7d) * 100)
+      : 0;
+    const loopScore = clamp(
+      Math.round(repeatRate * 0.35 + topTrackShare * 0.25 + topArtistShare * 0.25 + (100 - discoveryRate) * 0.15),
+      0,
+      100,
+    );
+    const loopLevel =
+      loopScore >= 70 ? "looped" :
+      loopScore >= 50 ? "stuck" :
+      loopScore >= 30 ? "warming" :
+      "fresh";
+    const loopDiagnosis =
+      total7d === 0
+        ? "Sync Spotify to see how repetitive your week has been."
+        : loopLevel === "looped"
+        ? "Your week is heavily concentrated. A reset should avoid your repeat tracks and dominant artists."
+        : loopLevel === "stuck"
+        ? "You are starting to orbit the same artists. A few taste-adjacent swaps would refresh things."
+        : loopLevel === "warming"
+        ? "There is some repetition, but your taste still has room for a gentle refresh."
+        : "Your week is already pretty varied. Fresh picks can push the edges without losing your taste.";
+    const loop = {
+      score: loopScore,
+      level: loopLevel,
+      diagnosis: loopDiagnosis,
+      repeatRate,
+      topTrackShare,
+      topArtistShare,
+      discoveryRate,
+      topRepeatedTrack: topRepeatedTrack
+        ? { trackName: topRepeatedTrack.name, artistName: topRepeatedTrack.artist, playCount: topRepeatedTrack.count }
+        : null,
+      dominantArtist: dominantArtistEntry
+        ? { artistName: dominantArtistEntry[0], playCount: dominantArtistEntry[1], pct: topArtistShare }
+        : null,
+    };
 
     // Burnout detection (no AI needed — pure math)
     const playCounts3d: Record<string, { count: number; trackName: string; artistName: string }> = {};
@@ -110,6 +168,7 @@ Return ONLY valid JSON: { "word": "...", "sentence": "..." }`,
       recentTopTracks,
       vibe,
       burnout,
+      loop,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed";

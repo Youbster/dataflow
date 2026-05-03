@@ -56,6 +56,8 @@ interface CachedPlaylist {
   expiresAt: number;
 }
 
+type GenerationGoal = "build_vibe" | "break_loop";
+
 const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
 const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const PLAYLIST_CACHE_MAX_ENTRIES = 80;
@@ -231,6 +233,7 @@ function buildCacheKey(
     sessionMinutes: number;
     familiarity: string;
     intensity: string;
+    goal: GenerationGoal;
     vocals: string;
     language: string;
     genreLock: string | null;
@@ -243,6 +246,7 @@ function buildCacheKey(
     sessionMinutes: body.sessionMinutes,
     familiarity: body.familiarity,
     intensity: body.intensity,
+    goal: body.goal,
     vocals: body.vocals,
     language: body.language,
     genreLock: normalizeToken(body.genreLock ?? ""),
@@ -479,6 +483,18 @@ function resolveSpotifyTrack(
   };
 }
 
+function resolveSpotifyDiscoveryTrack(t: SpotifyTrack, reason: string): PlaylistTrack {
+  return {
+    trackName:      t.name,
+    artistName:     t.artists[0]?.name ?? "Unknown",
+    section:        "discovery",
+    reason,
+    spotifyTrackId: t.id,
+    spotifyUri:     t.uri,
+    albumImageUrl:  t.album.images[0]?.url ?? null,
+  };
+}
+
 /**
  * Resolves AI-suggested (track, artist) pairs to real Spotify tracks using
  * spotify.findTrack() — which has 3 strategies + fuzzy artist matching.
@@ -561,12 +577,13 @@ export async function POST(request: NextRequest) {
   const sessionMinutes: number                     = body.sessionMinutes ?? 60;
   const familiarity: "familiar" | "mixed" | "fresh" = body.familiarity ?? "mixed";
   const intensity:   "low" | "mid" | "high"        = body.intensity   ?? "mid";
+  const generationGoal: GenerationGoal = body.goal === "break_loop" ? "break_loop" : "build_vibe";
   const vocals:      "any" | "lyrics" | "instrumental" = body.vocals  ?? "any";
   const language:    "any" | "english" | "match"   = body.language    ?? "any";
   const genreLock:   string | null = body.genreLock  ?? null;
   const artistLock:  string | null = body.artistLock ?? null;
 
-  if (!userPrompt.trim() && familiarity !== "fresh") {
+  if (!userPrompt.trim() && familiarity !== "fresh" && generationGoal !== "break_loop") {
     return NextResponse.json({ error: "Provide a description or pick a mood" }, { status: 400 });
   }
 
@@ -577,6 +594,7 @@ export async function POST(request: NextRequest) {
     sessionMinutes,
     familiarity,
     intensity,
+    goal: generationGoal,
     vocals,
     language,
     genreLock,
@@ -614,12 +632,20 @@ export async function POST(request: NextRequest) {
 
     // ── Build recent set + play counts from recently-played ───────────────────
     const playCounts7d: Record<string, number> = {};
+    const recentArtistCounts = new Map<string, { name: string; count: number }>();
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (const p of recentlyPlayedData.items ?? []) {
       // Spotify only returns ~50 recent plays — filter to the last 7 days
       if (new Date(p.played_at).getTime() < sevenDaysAgo) continue;
-      const key = `${p.track.name}|||${p.track.artists[0]?.name ?? ""}`;
+      const artistName = p.track.artists[0]?.name ?? "";
+      const key = `${p.track.name}|||${artistName}`;
       playCounts7d[key] = (playCounts7d[key] ?? 0) + 1;
+      const artistNorm = normalizeForCompare(artistName);
+      if (artistNorm) {
+        const current = recentArtistCounts.get(artistNorm) ?? { name: artistName, count: 0 };
+        current.count++;
+        recentArtistCounts.set(artistNorm, current);
+      }
     }
     const recentSet = new Set(Object.keys(playCounts7d));
 
@@ -662,9 +688,147 @@ export async function POST(request: NextRequest) {
       ? "\nHARD CONSTRAINTS (never violate):\n" + constraints.map((c) => `- ${c}`).join("\n")
       : "";
 
-    const requestStr = userPrompt.trim() || "Discover great music matching my taste";
+    const requestStr = userPrompt.trim()
+      || (generationGoal === "break_loop" ? "Break my Spotify loop" : "Discover great music matching my taste");
     const hasData    = shortCandidates.length > 0 || longCandidates.length > 0;
     const fallbackIntent = buildFallbackIntent(requestStr, familiarity, intensity, genreLock, artistLock);
+    const knownArtistNorms = new Set(
+      topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => normalizeForCompare(s.trim()))
+    );
+
+    // ── BREAK MY LOOP MODE ───────────────────────────────────────────────────
+    //
+    // Goal: solve the "Spotify keeps feeding me the same stuff" problem without
+    // losing the listener's taste. The recipe is explicit and cheap:
+    // 20% safe anchors, 20% forgotten long-term favorites, 60% taste-adjacent
+    // loop breakers that avoid recently repeated tracks and dominant artists.
+    if (generationGoal === "break_loop") {
+      const comfortTarget   = Math.max(1, Math.round(counts.total * 0.2));
+      const forgottenTarget = Math.max(1, Math.round(counts.total * 0.2));
+      const breakerTarget   = Math.max(2, counts.total - comfortTarget - forgottenTarget);
+      const breakIntent = await parsePlaylistIntent(
+        requestStr,
+        "mixed",
+        intensity,
+        constraintsStr,
+        genreLock,
+        artistLock,
+      );
+      const breakArtistGenreMap = new Map<string, string[]>();
+      for (const artist of shortArtists) {
+        breakArtistGenreMap.set(normalizeForCompare(artist.name), artist.genres ?? []);
+      }
+
+      const repeatedArtistNorms = new Set(
+        [...recentArtistCounts.entries()]
+          .sort((a, b) => b[1].count - a[1].count)
+          .slice(0, 4)
+          .filter(([, value]) => value.count >= 3)
+          .map(([norm]) => norm)
+      );
+      const breakScoreContext: ScoreContext = {
+        intent: { ...breakIntent, freshness: "mixed" },
+        requestTokens: new Set(tokensFromText(`${requestStr} ${genreStr} refresh discovery`)),
+        genreTokens: new Set([
+          ...tokensFromText(genreStr),
+          ...breakIntent.genres.flatMap(tokensFromText),
+        ]),
+        knownArtistNorms,
+        artistGenreMap: breakArtistGenreMap,
+        playCounts7d,
+      };
+
+      const blockedIds = new Set<string>();
+      const comfortRows = selectRankedTracks(
+        shortCandidates
+          .filter((track) => {
+            const artistName = track.artists[0]?.name ?? "";
+            return !recentSet.has(`${track.name}|||${artistName}`) && !repeatedArtistNorms.has(normalizeForCompare(artistName));
+          })
+          .slice(0, 40)
+          .map((track) => ({ track, era: "recent" as const })),
+        comfortTarget,
+        breakScoreContext,
+        blockedIds,
+      );
+      const forgottenRows = selectRankedTracks(
+        longCandidates
+          .filter((track) => !repeatedArtistNorms.has(normalizeForCompare(track.artists[0]?.name ?? "")))
+          .slice(0, 50)
+          .map((track) => ({ track, era: "classic" as const })),
+        forgottenTarget,
+        breakScoreContext,
+        blockedIds,
+      );
+
+      const breakerTracks: PlaylistTrack[] = [];
+      const existingIds = new Set<string>(blockedIds);
+      const breakerQueries = buildFreshSearchQueries(
+        `${requestStr} ${genreStr || allGenres.slice(0, 2).join(" ")}`,
+        allGenres,
+        breakIntent,
+        intensity,
+      );
+
+      for (const query of breakerQueries) {
+        if (breakerTracks.length >= breakerTarget) break;
+        const result = await spotify.searchTracks(query, 30).catch(() => null);
+        const items = result?.tracks?.items ?? [];
+        for (const track of items) {
+          if (breakerTracks.length >= breakerTarget) break;
+          const artistName = track.artists[0]?.name ?? "";
+          const artistNorm = normalizeForCompare(artistName);
+          if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+          if (repeatedArtistNorms.has(artistNorm)) continue;
+          if (existingIds.has(track.id)) continue;
+          existingIds.add(track.id);
+          breakerTracks.push(resolveSpotifyDiscoveryTrack(track, `Loop breaker — taste-adjacent via "${query}"`));
+        }
+      }
+
+      // If Spotify search is sparse for a niche taste, relax the dominant-artist
+      // filter but still avoid exact recent tracks and duplicates.
+      if (breakerTracks.length < Math.ceil(breakerTarget * 0.5)) {
+        for (const query of breakerQueries) {
+          if (breakerTracks.length >= breakerTarget) break;
+          const result = await spotify.searchTracks(query, 30).catch(() => null);
+          const items = result?.tracks?.items ?? [];
+          for (const track of items) {
+            if (breakerTracks.length >= breakerTarget) break;
+            const artistName = track.artists[0]?.name ?? "";
+            if (recentSet.has(`${track.name}|||${artistName}`)) continue;
+            if (existingIds.has(track.id)) continue;
+            existingIds.add(track.id);
+            breakerTracks.push(resolveSpotifyDiscoveryTrack(track, `Fresh reset — outside your recent repeats`));
+          }
+        }
+      }
+
+      const comfortTracks = comfortRows.map((track) =>
+        resolveSpotifyTrack(track, "anchor", "Comfort anchor — familiar taste, but not in your repeat loop")
+      );
+      const forgottenTracks = forgottenRows.map((track) =>
+        resolveSpotifyTrack(track, "groove", "Forgotten favorite — long-term taste you have not played recently")
+      );
+      const allTracks = sequencePlaylist(
+        [...comfortTracks, ...forgottenTracks, ...breakerTracks].slice(0, counts.total),
+        "build",
+      );
+
+      if (allTracks.length === 0) {
+        return NextResponse.json(
+          { error: "Couldn't build a loop reset yet. Reconnect Spotify or sync more listening history, then try again." },
+          { status: 422 },
+        );
+      }
+
+      const dominantArtist = [...recentArtistCounts.values()].sort((a, b) => b.count - a.count)[0]?.name ?? null;
+      const intro = dominantArtist
+        ? `Your loop reset is built to step away from ${dominantArtist}: a few safe anchors, forgotten favorites, and fresh taste-adjacent tracks.`
+        : "Your loop reset mixes safe anchors, forgotten favorites, and fresh taste-adjacent tracks outside your recent repeats.";
+
+      return buildResponse(allTracks, intro, requestStr, user.id, cacheKey);
+    }
 
     // ── FRESH / DISCOVERY MODE ────────────────────────────────────────────────
     //
@@ -874,11 +1038,6 @@ Return ONLY valid JSON (no markdown, no extra text):
     const grooveTarget    = longCandidates.length > 0
       ? Math.min(counts.groove, longCandidates.length) : 0;
     const discoveryTarget = familiarity === "familiar" ? 0 : counts.discovery;
-
-    // Build known-artist set for discovery filtering
-    const knownArtistNorms = new Set(
-      topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => s.trim().replace(/[^a-z0-9]/g, ""))
-    );
 
     const intent = await parsePlaylistIntent(
       requestStr,
