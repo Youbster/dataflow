@@ -1242,6 +1242,7 @@ export async function POST(request: NextRequest) {
           .map(([norm]) => norm)
       );
 
+      const minimumPoolTracks = Math.min(counts.total, sessionMinutes <= 20 ? 6 : 10);
       let escapePoolTracks = await selectEscapePoolTracks(user.id, admin, {
         targetCount: counts.total,
         requestText: `${modeRequestStr} ${breakLoopTarget}`,
@@ -1255,13 +1256,75 @@ export async function POST(request: NextRequest) {
         knownArtistNorms,
       });
 
-      if (escapePoolTracks.length < Math.min(6, counts.total)) {
+      if (escapePoolTracks.length < minimumPoolTracks) {
+        const topUpRequest = [
+          breakLoopTarget,
+          genreLock,
+          breakLoopMode === "near_taste" ? `${topArtists} radio deep cuts` : "",
+          breakLoopMode === "new_lane" ? "adjacent genre fresh finds crossover" : "",
+          breakLoopMode === "energy_shift" && intensity === "high" ? "upbeat dance workout fresh" : "",
+          breakLoopMode === "energy_shift" && intensity === "low" ? "chill downtempo soft fresh" : "",
+          breakLoopMode === "surprise" ? "fresh finds global indie alternative left field" : "",
+          ...modeConfig.queryBoosts,
+          ...allGenres.slice(0, 6),
+          requestStr,
+        ].filter(Boolean).join(" ");
+        const topUpTracks = await withTimeout(
+          buildFastSearchPlaylist({
+            spotify,
+            requestStr: topUpRequest,
+            allGenres,
+            intent: breakIntent,
+            intensity,
+            targetCount: counts.total,
+            recentSet,
+            knownArtistNorms,
+            avoidKnownArtists: breakLoopMode === "new_lane" || breakLoopMode === "surprise",
+            blockedTrackIds,
+            blockedTrackNorms,
+          }).catch((err) => {
+            console.warn("[break-loop] Escape Pool top-up skipped:", err);
+            return [] as PlaylistTrack[];
+          }),
+          7_000,
+          [] as PlaylistTrack[],
+        );
+        const seenTopUpIds = new Set(escapePoolTracks.map((track) => track.spotifyTrackId).filter(Boolean));
+        const combinedTracks = [
+          ...escapePoolTracks,
+          ...topUpTracks.filter((track) => track.spotifyTrackId && !seenTopUpIds.has(track.spotifyTrackId)),
+        ].slice(0, counts.total);
+
+        console.info("[break-loop] Escape Pool selection", {
+          mode: breakLoopMode,
+          poolTracks: escapePoolTracks.length,
+          topUpTracks: topUpTracks.length,
+          combinedTracks: combinedTracks.length,
+          minimumPoolTracks,
+        });
+
+        if (combinedTracks.length >= minimumPoolTracks) {
+          after(async () => {
+            await refreshEscapePool(user.id, spotify, admin).catch((err) => {
+              console.warn("[break-loop] Background Escape Pool refresh skipped:", err);
+            });
+          });
+          const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used your Escape Pool plus a fresh top-up, with recent plays and top repeats blocked.`;
+          return buildResponse(
+            sequencePlaylist(combinedTracks, "build"),
+            intro,
+            requestStr,
+            user.id,
+            cacheKey,
+          );
+        }
+
         await withTimeout(
           refreshEscapePool(user.id, spotify, admin).catch((err) => {
             console.warn("[break-loop] Escape Pool refresh skipped:", err);
             return { inserted: 0 };
           }),
-          6_500,
+          3_500,
           { inserted: 0 },
         );
         escapePoolTracks = await selectEscapePoolTracks(user.id, admin, {
@@ -1278,7 +1341,6 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      const minimumPoolTracks = Math.min(counts.total, sessionMinutes <= 20 ? 6 : 10);
       if (escapePoolTracks.length >= minimumPoolTracks) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset came from your Escape Pool: tracks already mapped to your taste, with recent plays and top repeats blocked.`;
         return buildResponse(
