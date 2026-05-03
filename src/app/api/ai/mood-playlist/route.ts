@@ -1289,16 +1289,61 @@ export async function POST(request: NextRequest) {
           7_000,
           [] as PlaylistTrack[],
         );
+        const catalogTopUpTracks = escapePoolTracks.length + topUpTracks.length < minimumPoolTracks
+          ? await withTimeout(
+              getArtistCatalogTracks(shortArtists.map((artist) => artist.id)).then((tracks) => {
+                const out: PlaylistTrack[] = [];
+                const seenArtists = new Map<string, number>();
+                for (const track of tracks) {
+                  if (out.length >= counts.total) break;
+                  const artistName = track.artists[0]?.name ?? "";
+                  const artistNorm = normalizeForCompare(artistName);
+                  if (!artistNorm) continue;
+                  if (blockedTrackIds.has(track.id)) continue;
+                  if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) continue;
+                  if ((seenArtists.get(artistNorm) ?? 0) >= 2) continue;
+                  seenArtists.set(artistNorm, (seenArtists.get(artistNorm) ?? 0) + 1);
+                  const section =
+                    out.length < Math.max(1, Math.round(counts.total * 0.25))
+                      ? "anchor"
+                      : out.length < Math.max(2, Math.round(counts.total * 0.7))
+                      ? "groove"
+                      : "discovery";
+                  out.push(
+                    section === "discovery"
+                      ? resolveSpotifyDiscoveryTrack(track, "Catalog escape - a non-repeat from your wider taste map")
+                      : resolveSpotifyTrack(
+                          track,
+                          section,
+                          section === "anchor"
+                            ? "Catalog anchor - familiar artist, different track"
+                            : "Catalog bridge - outside your blocked repeats",
+                        )
+                  );
+                }
+                return out;
+              }).catch((err) => {
+                console.warn("[break-loop] Catalog top-up skipped:", err);
+                return [] as PlaylistTrack[];
+              }),
+              7_000,
+              [] as PlaylistTrack[],
+            )
+          : [];
         const seenTopUpIds = new Set(escapePoolTracks.map((track) => track.spotifyTrackId).filter(Boolean));
-        const combinedTracks = [
-          ...escapePoolTracks,
-          ...topUpTracks.filter((track) => track.spotifyTrackId && !seenTopUpIds.has(track.spotifyTrackId)),
-        ].slice(0, counts.total);
+        const combinedTracks = [...escapePoolTracks];
+        for (const track of [...topUpTracks, ...catalogTopUpTracks]) {
+          if (combinedTracks.length >= counts.total) break;
+          if (!track.spotifyTrackId || seenTopUpIds.has(track.spotifyTrackId)) continue;
+          seenTopUpIds.add(track.spotifyTrackId);
+          combinedTracks.push(track);
+        }
 
         console.info("[break-loop] Escape Pool selection", {
           mode: breakLoopMode,
           poolTracks: escapePoolTracks.length,
           topUpTracks: topUpTracks.length,
+          catalogTopUpTracks: catalogTopUpTracks.length,
           combinedTracks: combinedTracks.length,
           minimumPoolTracks,
         });
