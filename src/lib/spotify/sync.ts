@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createSpotifyClient } from "./client";
+import { refreshEscapePool } from "@/lib/escape-pool";
 import { TIME_RANGES } from "@/lib/constants";
 import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
 
@@ -63,6 +64,12 @@ export async function syncUserData(
           total_history_records: count ?? 0,
         })
         .eq("user_id", userId);
+    }
+
+    if (options.topItems) {
+      await refreshEscapePool(userId, spotify, supabase).catch((err) => {
+        console.warn("[sync] Escape Pool refresh skipped:", err);
+      });
     }
 
     await supabase

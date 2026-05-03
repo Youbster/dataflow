@@ -5,6 +5,7 @@ import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
+import { markEscapePoolRecommended, refreshEscapePool, selectEscapePoolTracks } from "@/lib/escape-pool";
 import { SPOTIFY_API_BASE, SPOTIFY_TOKEN_URL } from "@/lib/constants";
 import type { SpotifyTrack, SpotifyArtist, SpotifySearchResult } from "@/types/spotify";
 
@@ -1240,6 +1241,54 @@ export async function POST(request: NextRequest) {
           .filter(([, value]) => value.count >= 3)
           .map(([norm]) => norm)
       );
+
+      let escapePoolTracks = await selectEscapePoolTracks(user.id, admin, {
+        targetCount: counts.total,
+        requestText: `${modeRequestStr} ${breakLoopTarget}`,
+        mode: "break_loop",
+        breakLoopMode,
+        intensity,
+        genreHints: [genreLock ?? "", breakLoopTarget, ...allGenres, ...modeConfig.queryBoosts],
+        blockedTrackIds,
+        blockedTrackNorms,
+        repeatedArtistNorms,
+        knownArtistNorms,
+      });
+
+      if (escapePoolTracks.length < Math.min(6, counts.total)) {
+        await withTimeout(
+          refreshEscapePool(user.id, spotify, admin).catch((err) => {
+            console.warn("[break-loop] Escape Pool refresh skipped:", err);
+            return { inserted: 0 };
+          }),
+          6_500,
+          { inserted: 0 },
+        );
+        escapePoolTracks = await selectEscapePoolTracks(user.id, admin, {
+          targetCount: counts.total,
+          requestText: `${modeRequestStr} ${breakLoopTarget}`,
+          mode: "break_loop",
+          breakLoopMode,
+          intensity,
+          genreHints: [genreLock ?? "", breakLoopTarget, ...allGenres, ...modeConfig.queryBoosts],
+          blockedTrackIds,
+          blockedTrackNorms,
+          repeatedArtistNorms,
+          knownArtistNorms,
+        });
+      }
+
+      if (escapePoolTracks.length >= Math.min(6, counts.total)) {
+        const intro = `Your ${modeConfig.label.toLowerCase()} loop reset came from your Escape Pool: tracks already mapped to your taste, with recent plays and top repeats blocked.`;
+        return buildResponse(
+          sequencePlaylist(escapePoolTracks.slice(0, counts.total), "build"),
+          intro,
+          requestStr,
+          user.id,
+          cacheKey,
+        );
+      }
+
       const breakScoreContext: ScoreContext = {
         intent: { ...breakIntent, freshness: "mixed" },
         requestTokens: new Set(tokensFromText(`${modeRequestStr} ${genreStr} refresh discovery ${modeConfig.queryBoosts.join(" ")}`)),
@@ -1883,6 +1932,11 @@ function buildResponse(
     try {
       const admin = createAdminClient();
       const verifiedCount = tracks.filter((t) => t.spotifyTrackId).length;
+      await markEscapePoolRecommended(
+        userId,
+        admin,
+        tracks.map((track) => track.spotifyTrackId).filter((id): id is string => Boolean(id)),
+      );
       const coverImageUrl = tracks.find((t) => t.albumImageUrl)?.albumImageUrl ?? null;
       const nameLabel     = promptUsed.trim().slice(0, 40) || "Generated Playlist";
       const dateLabel     = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
