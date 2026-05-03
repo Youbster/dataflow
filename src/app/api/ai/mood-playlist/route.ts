@@ -616,6 +616,8 @@ async function buildFastSearchPlaylist({
   recentSet,
   knownArtistNorms,
   avoidKnownArtists,
+  blockedTrackIds,
+  blockedTrackNorms,
 }: {
   spotify: ReturnType<typeof createSpotifyClient>;
   requestStr: string;
@@ -626,6 +628,8 @@ async function buildFastSearchPlaylist({
   recentSet: Set<string>;
   knownArtistNorms: Set<string>;
   avoidKnownArtists: boolean;
+  blockedTrackIds?: Set<string>;
+  blockedTrackNorms?: Set<string>;
 }): Promise<PlaylistTrack[]> {
   const genericStop = new Set(["break", "spotify", "loop", "reset", "refresh", "discover", "music", "playlist"]);
   const cleanQuery = (query: string) =>
@@ -671,6 +675,8 @@ async function buildFastSearchPlaylist({
     const artistNorm = normalizeForCompare(artistName);
     if (!artistNorm) return;
     if (recentSet.has(`${track.name}|||${artistName}`)) return;
+    if (blockedTrackIds?.has(track.id)) return;
+    if (blockedTrackNorms?.has(trackIdentity(track.name, artistName))) return;
     if (avoidKnownArtists && !relaxKnownArtists && knownArtistNorms.has(artistNorm)) return;
     if ((artistCounts.get(artistNorm) ?? 0) >= 2) return;
 
@@ -1325,10 +1331,12 @@ Return ONLY valid JSON:
           recentSet,
           knownArtistNorms,
           avoidKnownArtists: false,
+          blockedTrackIds,
+          blockedTrackNorms,
         });
 
         if (fallbackTracks.length > 0) {
-          const intro = `Your ${modeConfig.label.toLowerCase()} loop reset uses a wider fallback lane because Spotify did not return enough strict reset candidates. It still avoids your recent plays and gives you fresh tracks to move with.`;
+          const intro = `Your ${modeConfig.label.toLowerCase()} loop reset uses a wider fallback lane because Spotify did not return enough strict reset candidates. It still blocks your recent plays and top repeats while giving you fresh tracks to move with.`;
           return buildResponse(
             sequencePlaylist(fallbackTracks, "build"),
             intro,
@@ -1367,36 +1375,11 @@ Return ONLY valid JSON:
       );
 
       if (allTracks.length === 0) {
-        const cachedFallback = sequencePlaylist(
-          [...longCandidates, ...shortCandidates]
-            .filter((track) => !recentSet.has(`${track.name}|||${track.artists[0]?.name ?? ""}`))
-            .slice(0, counts.total)
-            .map((track, index) => {
-              const section =
-                index < Math.max(1, Math.round(counts.total * 0.25))
-                  ? "anchor"
-                  : index < Math.max(2, Math.round(counts.total * 0.7))
-                  ? "groove"
-                  : "discovery";
-              return section === "discovery"
-                ? resolveSpotifyDiscoveryTrack(track, "Cached taste fallback outside your recent plays")
-                : resolveSpotifyTrack(track, section, "Cached taste fallback outside your recent plays");
-            }),
-          "build",
-        );
-
-        if (cachedFallback.length > 0) {
-          return buildResponse(
-            cachedFallback,
-            `Your ${modeConfig.label.toLowerCase()} loop reset used cached taste because Spotify search returned too few reset candidates. It still avoids your recent plays.`,
-            requestStr,
-            user.id,
-            cacheKey,
-          );
-        }
-
         return NextResponse.json(
-          { error: "Spotify could not return playable tracks right now. Reconnect Spotify, then try again." },
+          {
+            error:
+              "Spotify could not find enough non-repeat tracks for this reset. Try adding a direction like afro house, indie dance, or chill R&B.",
+          },
           { status: 502 },
         );
       }
