@@ -19,14 +19,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DataFlow — Spotify Insights & AI Music Discovery",
+  title: "Escapify — Spotify Insights & AI Music Discovery",
   description:
     "Connect your Spotify account to get deep listening insights, AI-powered playlist recommendations, and discover new music you'll love.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "DataFlow",
+    title: "Escapify",
   },
   icons: {
     icon: [

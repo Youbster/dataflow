@@ -1,6 +1,6 @@
 {
-  "name": "DataFlow",
-  "short_name": "DataFlow",
+  "name": "Escapify",
+  "short_name": "Escapify",
   "description": "AI-powered Spotify insights & music discovery",
   "start_url": "/dashboard",
   "display": "standalone",

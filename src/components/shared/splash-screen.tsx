@@ -33,7 +33,7 @@ export function SplashScreen() {
         <div className="w-20 h-20 rounded-[22px] bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-[0_0_60px_rgba(29,185,84,0.45)]">
           <Music className="w-10 h-10 text-black" strokeWidth={2.5} />
         </div>
-        <p className="text-[22px] font-bold tracking-tight">DataFlow</p>
+        <p className="text-[22px] font-bold tracking-tight">Escapify</p>
       </div>
     </div>
   );

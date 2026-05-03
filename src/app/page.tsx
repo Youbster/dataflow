@@ -9,7 +9,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between px-6 h-14">
           <Link href="/" className="flex items-center gap-2">
             <Music className="w-5 h-5 text-primary" />
-            <span className="font-bold text-lg">DataFlow</span>
+            <span className="font-bold text-lg">Escapify</span>
           </Link>
           <Link href="/login">
             <Button size="sm">Get Started</Button>

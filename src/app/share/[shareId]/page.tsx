@@ -7,13 +7,12 @@ interface PageProps {
   params: Promise<{ shareId: string }>;
 }
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const { shareId } = await params;
+export async function generateMetadata(): Promise<Metadata> {
   return {
-    title: `Shared Dashboard — DataFlow`,
-    description: `Check out this music dashboard on DataFlow`,
+    title: `Shared Dashboard — Escapify`,
+    description: `Check out this music dashboard on Escapify`,
     openGraph: {
-      title: "DataFlow — Shared Music Dashboard",
+      title: "Escapify — Shared Music Dashboard",
       description: "See what they've been listening to!",
     },
   };
@@ -75,7 +74,7 @@ export default async function SharedDashboardPage({ params }: PageProps) {
         <div className="text-center space-y-2">
           <div className="flex items-center justify-center gap-2">
             <Music className="w-6 h-6 text-primary" />
-            <h1 className="text-2xl font-bold">DataFlow</h1>
+            <h1 className="text-2xl font-bold">Escapify</h1>
           </div>
           <h2 className="text-lg text-muted-foreground">
             {dashboard.title || "Shared Music Dashboard"}
@@ -160,7 +159,7 @@ export default async function SharedDashboardPage({ params }: PageProps) {
         )}
 
         <p className="text-center text-xs text-muted-foreground">
-          Powered by DataFlow — AI-powered Spotify insights
+          Powered by Escapify — AI-powered Spotify insights
         </p>
       </div>
     </div>

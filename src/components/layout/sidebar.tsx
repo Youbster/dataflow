@@ -27,7 +27,7 @@ export function Sidebar() {
           <div className="relative w-8 h-8 rounded-[10px] bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-[0_0_18px_rgba(29,185,84,0.4)] group-hover:shadow-[0_0_26px_rgba(29,185,84,0.55)] transition-all duration-300 shrink-0">
             <Music className="w-[15px] h-[15px] text-black" strokeWidth={2.5} />
           </div>
-          <span className="font-bold text-[15px] tracking-tight text-foreground">DataFlow</span>
+          <span className="font-bold text-[15px] tracking-tight text-foreground">Escapify</span>
         </Link>
       </div>
 

@@ -1,6 +1,6 @@
 import type { UserTopTrack, UserTopArtist } from "@/types/database";
 
-export const MUSIC_EXPERT_SYSTEM = `You are DataFlow's music intelligence engine. You are an expert musicologist with deep knowledge of artists, genres, subgenres, music history, and the connections between them. You analyze Spotify listening data and provide insights, recommendations, and playlist curation.
+export const MUSIC_EXPERT_SYSTEM = `You are Escapify's music intelligence engine. You are an expert musicologist with deep knowledge of artists, genres, subgenres, music history, and the connections between them. You analyze Spotify listening data and provide insights, recommendations, and playlist curation.
 
 IMPORTANT CONSTRAINTS:
 - Only recommend real, existing tracks that are available on Spotify.

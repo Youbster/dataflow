@@ -12,31 +12,30 @@ import { useSearchParams } from "next/navigation";
 // into a child component so the build doesn't fail during prerendering.
 function LoginContent() {
   const searchParams = useSearchParams();
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash;
+      if (hash) {
+        const params = new URLSearchParams(hash.slice(1));
+        const desc = params.get("error_description");
+        if (desc) return decodeURIComponent(desc.replace(/\+/g, " "));
+      }
+    }
+
+    const qErr = searchParams.get("error");
+    if (!qErr) return null;
+    return qErr === "no_code"
+      ? "Login was cancelled or failed. Please try again."
+      : `Login error: ${qErr}`;
+  });
 
   useEffect(() => {
     // Supabase sends OAuth errors in the URL hash (e.g. #error_description=…).
     // The server never sees hash params, so we read them client-side.
     const hash = window.location.hash;
     if (hash) {
-      const params = new URLSearchParams(hash.slice(1));
-      const desc = params.get("error_description");
-      if (desc) {
-        setAuthError(decodeURIComponent(desc.replace(/\+/g, " ")));
-        // Clean the hash so refreshing doesn't re-show the error
-        window.history.replaceState(null, "", window.location.pathname + window.location.search);
-      }
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-    // Also surface query-param errors (e.g. ?error=auth_failed)
-    const qErr = searchParams.get("error");
-    if (qErr && !authError) {
-      setAuthError(
-        qErr === "no_code"
-          ? "Login was cancelled or failed. Please try again."
-          : `Login error: ${qErr}`
-      );
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSpotifyLogin() {
@@ -59,7 +58,7 @@ function LoginContent() {
             <Music className="w-8 h-8 text-primary" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">DataFlow</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Escapify</h1>
             <p className="text-muted-foreground mt-2">
               AI-powered music insights from your Spotify data
             </p>

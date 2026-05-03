@@ -16,7 +16,7 @@ const pageTitles: Record<string, string> = {
 
 export function Topbar() {
   const pathname = usePathname();
-  const title = Object.entries(pageTitles).find(([p]) => pathname.startsWith(p))?.[1] ?? "DataFlow";
+  const title = Object.entries(pageTitles).find(([p]) => pathname.startsWith(p))?.[1] ?? "Escapify";
 
   return (
     <header className="glass-topbar sticky top-0 z-40 flex h-14 items-center gap-3 px-4 md:px-6">

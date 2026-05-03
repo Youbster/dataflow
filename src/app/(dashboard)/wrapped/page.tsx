@@ -135,7 +135,7 @@ export default function WrappedPage() {
     <div key="intro" className="flex flex-col items-center justify-center h-full gap-8 text-center px-8">
       <div className="space-y-2">
         <p className="text-sm font-medium tracking-[0.3em] uppercase" style={{ color: accent }}>
-          DataFlow Wrapped
+          Escapify Wrapped
         </p>
         <h1 className="text-6xl sm:text-7xl font-black tracking-tight text-white leading-none">
           {data.monthName.split(" ")[0]}
@@ -144,7 +144,7 @@ export default function WrappedPage() {
       </div>
       <div className="w-px h-16 bg-gradient-to-b from-white/0 via-white/30 to-white/0" />
       <p className="text-white/70 text-lg max-w-xs leading-relaxed">
-        Here's what your music said about you this month.
+        Here&apos;s what your music said about you this month.
       </p>
       <div className="flex flex-col items-center gap-1 mt-4">
         <p className="text-white/40 text-xs">Tap anywhere or press →</p>
@@ -271,7 +271,7 @@ export default function WrappedPage() {
     // 5 — Mood Journey
     <div key="mood" className="flex flex-col items-center justify-center h-full gap-6 text-center px-8 max-w-md mx-auto">
       <p className="text-sm font-medium tracking-[0.3em] uppercase" style={{ color: accent }}>
-        Your Month's Arc
+        Your Month&apos;s Arc
       </p>
       <div className="w-full flex items-end justify-center gap-2 h-24">
         {data.weekBreakdown.map((w) => {
