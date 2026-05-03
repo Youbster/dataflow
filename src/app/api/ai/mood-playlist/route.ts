@@ -5,7 +5,7 @@ import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
-import type { SpotifyTrack } from "@/types/spotify";
+import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
 
 // Give Vercel up to 30 seconds for this function (Pro plan).
 // Hobby plan is capped at 10s regardless; the client-side AbortController
@@ -38,6 +38,38 @@ interface PlaylistIntent {
 interface CandidateTrack {
   track: SpotifyTrack;
   era: "recent" | "classic";
+}
+
+interface CachedTopTrackRow {
+  spotify_track_id: string;
+  track_name: string;
+  artist_names: string[] | null;
+  artist_ids: string[] | null;
+  album_name: string | null;
+  album_image_url: string | null;
+  duration_ms: number | null;
+  preview_url: string | null;
+  popularity: number | null;
+  rank: number;
+}
+
+interface CachedTopArtistRow {
+  spotify_artist_id: string;
+  artist_name: string;
+  genres: string[] | null;
+  image_url: string | null;
+  popularity: number | null;
+  follower_count: number | null;
+  rank: number;
+}
+
+interface CachedHistoryRow {
+  spotify_track_id: string;
+  track_name: string;
+  artist_names: string[] | null;
+  album_name: string | null;
+  album_image_url: string | null;
+  played_at: string;
 }
 
 interface ScoreContext {
@@ -90,6 +122,42 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
     promise,
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
   ]);
+}
+
+function cachedTrackToSpotifyTrack(row: CachedTopTrackRow | CachedHistoryRow): SpotifyTrack {
+  const artistNames = row.artist_names ?? [];
+  const artistIds = "artist_ids" in row ? row.artist_ids ?? [] : [];
+  return {
+    id: row.spotify_track_id,
+    name: row.track_name,
+    uri: `spotify:track:${row.spotify_track_id}`,
+    artists: artistNames.map((name, index) => ({
+      id: artistIds[index] ?? "",
+      name,
+    })),
+    album: {
+      id: "",
+      name: row.album_name ?? "",
+      images: row.album_image_url
+        ? [{ url: row.album_image_url, width: 640, height: 640 }]
+        : [],
+    },
+    duration_ms: "duration_ms" in row ? row.duration_ms ?? 0 : 0,
+    popularity: "popularity" in row ? row.popularity ?? 50 : 50,
+    preview_url: "preview_url" in row ? row.preview_url ?? null : null,
+  };
+}
+
+function cachedArtistToSpotifyArtist(row: CachedTopArtistRow): SpotifyArtist {
+  return {
+    id: row.spotify_artist_id,
+    name: row.artist_name,
+    uri: `spotify:artist:${row.spotify_artist_id}`,
+    genres: row.genres ?? [],
+    images: row.image_url ? [{ url: row.image_url, width: 640, height: 640 }] : [],
+    popularity: row.popularity ?? 50,
+    followers: { total: row.follower_count ?? 0 },
+  };
 }
 
 async function updatePlaylistJob(
@@ -855,35 +923,65 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // ── Fetch user data — direct Spotify calls, no Supabase data queries ──────
+    // ── Fetch taste data from Supabase cache, not live Spotify ───────────────
     //
-    // Previously: 4 Supabase admin queries → cold-start Supabase free tier could
-    // hang for 20-30s before returning.
-    // Now: 4 parallel Spotify API calls — token is cached in-process (token.ts),
-    // so only 1 DB hit happens (first call), subsequent calls use the cache.
-    // Total expected latency: ~300-600 ms vs 5-30 s.
-    type TopTracksPage = Awaited<ReturnType<typeof spotify.getTopTracks>>;
-    type TopArtistsPage = Awaited<ReturnType<typeof spotify.getTopArtists>>;
-    type RecentPage = Awaited<ReturnType<typeof spotify.getRecentlyPlayed>>;
-    const emptyTracksPage: TopTracksPage = { items: [], total: 0, limit: 0, offset: 0, next: null };
-    const emptyArtistsPage: TopArtistsPage = { items: [], total: 0, limit: 0, offset: 0, next: null };
-    const emptyRecentPage: RecentPage = { items: [], next: null, cursors: null };
-    const spotifyProfilePromise = Promise.all([
-      spotify.getTopTracks("short_term", 50).catch(() => emptyTracksPage),
-      spotify.getTopTracks("long_term",  50).catch(() => emptyTracksPage),
-      spotify.getTopArtists("short_term", 10).catch(() => emptyArtistsPage),
-      spotify.getRecentlyPlayed(50).catch(() => emptyRecentPage),
-    ]) as Promise<[TopTracksPage, TopTracksPage, TopArtistsPage, RecentPage]>;
-    const [
-      shortTracksData,
-      longTracksData,
-      shortArtistsData,
-      recentlyPlayedData,
-    ] = await withTimeout(
-      spotifyProfilePromise,
-      generationGoal === "break_loop" ? 5_500 : 6_500,
-      [emptyTracksPage, emptyTracksPage, emptyArtistsPage, emptyRecentPage],
+    // Generation must be fast and predictable on Vercel. The dashboard/sync
+    // pipeline owns the expensive Spotify profile reads; playlist generation
+    // consumes those cached rows and only uses Spotify later for focused search.
+    const admin = createAdminClient();
+    const cachedTastePromise = Promise.all([
+      admin
+        .from("user_top_tracks")
+        .select("spotify_track_id, track_name, artist_names, artist_ids, album_name, album_image_url, duration_ms, preview_url, popularity, rank")
+        .eq("user_id", user.id)
+        .eq("time_range", "short_term")
+        .order("rank")
+        .limit(50)
+        .then(({ data }) => (data ?? []) as CachedTopTrackRow[]),
+      admin
+        .from("user_top_tracks")
+        .select("spotify_track_id, track_name, artist_names, artist_ids, album_name, album_image_url, duration_ms, preview_url, popularity, rank")
+        .eq("user_id", user.id)
+        .eq("time_range", "long_term")
+        .order("rank")
+        .limit(50)
+        .then(({ data }) => (data ?? []) as CachedTopTrackRow[]),
+      admin
+        .from("user_top_artists")
+        .select("spotify_artist_id, artist_name, genres, image_url, popularity, follower_count, rank")
+        .eq("user_id", user.id)
+        .eq("time_range", "short_term")
+        .order("rank")
+        .limit(25)
+        .then(({ data }) => (data ?? []) as CachedTopArtistRow[]),
+      admin
+        .from("user_listening_history")
+        .select("spotify_track_id, track_name, artist_names, album_name, album_image_url, played_at")
+        .eq("user_id", user.id)
+        .order("played_at", { ascending: false })
+        .limit(80)
+        .then(({ data }) => (data ?? []) as CachedHistoryRow[]),
+    ]);
+    const [shortTrackRows, longTrackRows, shortArtistRows, recentlyPlayedRows] = await withTimeout(
+      cachedTastePromise,
+      2_500,
+      [
+        [] as CachedTopTrackRow[],
+        [] as CachedTopTrackRow[],
+        [] as CachedTopArtistRow[],
+        [] as CachedHistoryRow[],
+      ],
     );
+    const shortTracksData = { items: shortTrackRows.map(cachedTrackToSpotifyTrack) };
+    const longTracksData = { items: longTrackRows.map(cachedTrackToSpotifyTrack) };
+    const shortArtistsData = { items: shortArtistRows.map(cachedArtistToSpotifyArtist) };
+    const recentlyPlayedData = {
+      items: recentlyPlayedRows.map((row) => ({
+        track: cachedTrackToSpotifyTrack(row),
+        played_at: row.played_at,
+        context: null,
+      })),
+    };
 
     // ── Build recent set + play counts from recently-played ───────────────────
     const playCounts7d: Record<string, number> = {};
@@ -1214,7 +1312,7 @@ Return ONLY valid JSON:
           console.error("[break-loop] AI reset fallback failed:", err);
           return [] as SpotifyTrack[];
         }),
-        10_000,
+        4_000,
         [] as SpotifyTrack[],
       );
 
@@ -1225,7 +1323,7 @@ Return ONLY valid JSON:
               spotify.searchTracks(query, limit).then((result) => ({ query, result }))
             )
           ),
-          8_000,
+          4_500,
           [],
         );
 
@@ -1254,7 +1352,7 @@ Return ONLY valid JSON:
       // their job. This keeps niche tastes from returning too few songs while
       // still refusing recent/top-track repeats.
       if (resetCandidates.length < Math.ceil(counts.total * 0.75)) {
-        const relaxedResults = await searchBatch(strictQueries.slice(0, 6), 25);
+        const relaxedResults = await searchBatch(strictQueries.slice(0, 4), 20);
         for (const { track, query } of relaxedResults) {
           if (resetCandidates.length >= counts.total) break;
           addResetTrack(track, query, false);
@@ -1262,7 +1360,7 @@ Return ONLY valid JSON:
       }
 
       if (resetCandidates.length === 0) {
-        const broadResults = await searchBatch(["new music friday", "fresh finds", "indie pop", "dance hits", "alternative hits", "electronic hits"], 30);
+        const broadResults = await searchBatch(["fresh finds", "indie pop", "dance hits", "electronic hits"], 25);
         for (const { track, query } of broadResults) {
           if (resetCandidates.length >= counts.total) break;
           addResetTrack(track, query, false);
@@ -1356,7 +1454,45 @@ Return ONLY valid JSON:
     //   fallback strategies + fuzzy matching → ~85%+ success rate per suggestion
     //   → tracks genuinely fit the requested vibe, not just an artist's biggest hit
     if (familiarity === "fresh" || !hasData) {
-      const targetCount = familiarity === "fresh" ? counts.total : counts.discovery;
+      if (familiarity === "fresh") {
+        const intent = await parsePlaylistIntent(
+          requestStr,
+          familiarity,
+          intensity,
+          constraintsStr,
+          genreLock,
+          artistLock,
+        );
+        const tracks = await buildFastSearchPlaylist({
+          spotify,
+          requestStr: `${requestStr} ${genreLock ?? ""} ${allGenres.slice(0, 4).join(" ")}`,
+          allGenres,
+          intent,
+          intensity,
+          targetCount: counts.total,
+          recentSet,
+          knownArtistNorms,
+          avoidKnownArtists: true,
+        });
+
+        if (tracks.length === 0) {
+          return NextResponse.json(
+            { error: "Spotify did not return fresh tracks for this request. Try adding a clearer genre or mood." },
+            { status: 422 },
+          );
+        }
+
+        const sequenced = sequencePlaylist(tracks, intent.flow ?? fallbackIntent.flow);
+        return buildResponse(
+          sequenced,
+          `Fresh picks for "${requestStr}" using your cached taste as direction while avoiding recent plays.`,
+          userPrompt,
+          user.id,
+          cacheKey,
+        );
+      }
+
+      const targetCount = counts.discovery;
       // Ask for a capped buffer so free-tier Vercel/OpenAI usage stays predictable.
       // Spotify search fallbacks can still fill longer playlists if needed.
       const askFor = Math.min(Math.ceil(targetCount * 1.5), 16);
