@@ -79,6 +79,10 @@ function normalizeToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function trackIdentity(trackName: string, artistName: string): string {
+  return normalizeForCompare(`${trackName}|||${artistName}`);
+}
+
 function uniqueStrings(values: string[], limit = 12): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -699,13 +703,13 @@ export async function POST(request: NextRequest) {
     // ── BREAK MY LOOP MODE ───────────────────────────────────────────────────
     //
     // Goal: solve the "Spotify keeps feeding me the same stuff" problem without
-    // losing the listener's taste. The recipe is explicit and cheap:
-    // 20% safe anchors, 20% forgotten long-term favorites, 60% taste-adjacent
-    // loop breakers that avoid recently repeated tracks and dominant artists.
+    // losing the listener's taste. The first version reused top-track pools for
+    // anchors/bridges; that can repackage the loop. This mode now builds from
+    // Spotify search against the user's taste DNA while hard-blocking recent
+    // history plus short-term and long-term top tracks.
     if (generationGoal === "break_loop") {
       const comfortTarget   = Math.max(1, Math.round(counts.total * 0.2));
       const forgottenTarget = Math.max(1, Math.round(counts.total * 0.2));
-      const breakerTarget   = Math.max(2, counts.total - comfortTarget - forgottenTarget);
       const breakIntent = await parsePlaylistIntent(
         requestStr,
         "mixed",
@@ -717,6 +721,42 @@ export async function POST(request: NextRequest) {
       const breakArtistGenreMap = new Map<string, string[]>();
       for (const artist of shortArtists) {
         breakArtistGenreMap.set(normalizeForCompare(artist.name), artist.genres ?? []);
+      }
+
+      const blockedTrackIds = new Set<string>();
+      const blockedTrackNorms = new Set<string>();
+      const blockTrack = (trackName: string, artistName: string, id?: string | null) => {
+        if (id) blockedTrackIds.add(id);
+        blockedTrackNorms.add(trackIdentity(trackName, artistName));
+      };
+
+      for (const key of recentSet) {
+        const [trackName, artistName] = key.split("|||");
+        blockTrack(trackName ?? "", artistName ?? "");
+      }
+      for (const track of [...(shortTracksData.items ?? []), ...(longTracksData.items ?? [])]) {
+        blockTrack(track.name, track.artists[0]?.name ?? "", track.id);
+      }
+
+      try {
+        const historySince = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: loopHistory } = await createAdminClient()
+          .from("user_listening_history")
+          .select("spotify_track_id, track_name, artist_names")
+          .eq("user_id", user.id)
+          .gte("played_at", historySince)
+          .limit(300);
+
+        for (const item of loopHistory ?? []) {
+          blockTrack(
+            (item.track_name as string | null) ?? "",
+            ((item.artist_names as string[] | null)?.[0]) ?? "",
+            (item.spotify_track_id as string | null) ?? null,
+          );
+        }
+      } catch {
+        // Spotify's recent/top-track blockers still protect the reset if the
+        // synced history table is cold or Supabase is slow on the free tier.
       }
 
       const repeatedArtistNorms = new Set(
@@ -738,78 +778,92 @@ export async function POST(request: NextRequest) {
         playCounts7d,
       };
 
-      const blockedIds = new Set<string>();
-      const comfortRows = selectRankedTracks(
-        shortCandidates
-          .filter((track) => {
-            const artistName = track.artists[0]?.name ?? "";
-            return !recentSet.has(`${track.name}|||${artistName}`) && !repeatedArtistNorms.has(normalizeForCompare(artistName));
-          })
-          .slice(0, 40)
-          .map((track) => ({ track, era: "recent" as const })),
-        comfortTarget,
-        breakScoreContext,
-        blockedIds,
-      );
-      const forgottenRows = selectRankedTracks(
-        longCandidates
-          .filter((track) => !repeatedArtistNorms.has(normalizeForCompare(track.artists[0]?.name ?? "")))
-          .slice(0, 50)
-          .map((track) => ({ track, era: "classic" as const })),
-        forgottenTarget,
-        breakScoreContext,
-        blockedIds,
-      );
+      type ResetCandidate = { track: SpotifyTrack; query: string; strict: boolean };
+      const resetCandidates: ResetCandidate[] = [];
+      const existingIds = new Set<string>();
+      const artistPickCounts = new Map<string, number>();
+      const addResetTrack = (track: SpotifyTrack, query: string, strict: boolean) => {
+        const artistName = track.artists[0]?.name ?? "";
+        const artistNorm = normalizeForCompare(artistName);
+        if (!artistNorm) return;
+        if (existingIds.has(track.id) || blockedTrackIds.has(track.id)) return;
+        if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return;
+        if (strict && (knownArtistNorms.has(artistNorm) || repeatedArtistNorms.has(artistNorm))) return;
+        if ((artistPickCounts.get(artistNorm) ?? 0) >= 2) return;
+        existingIds.add(track.id);
+        artistPickCounts.set(artistNorm, (artistPickCounts.get(artistNorm) ?? 0) + 1);
+        resetCandidates.push({ track, query, strict });
+      };
 
-      const breakerTracks: PlaylistTrack[] = [];
-      const existingIds = new Set<string>(blockedIds);
+      const tasteQueries = uniqueStrings(
+        [
+          genreLock ?? "",
+          ...breakIntent.genres,
+          ...breakIntent.keywords.slice(0, 5),
+          ...allGenres.slice(0, 8),
+          genreStr.split(",")[0] ?? "",
+          "indie dance",
+          "alternative",
+          "electronic",
+        ],
+        14,
+      );
       const breakerQueries = buildFreshSearchQueries(
-        `${requestStr} ${genreStr || allGenres.slice(0, 2).join(" ")}`,
+        `${requestStr} ${tasteQueries.slice(0, 4).join(" ")}`,
         allGenres,
         breakIntent,
         intensity,
       );
+      const strictQueries = [...tasteQueries, ...breakerQueries]
+        .map((q) => q.trim())
+        .filter((q, index, arr) => q.length > 0 && arr.indexOf(q) === index)
+        .slice(0, 12);
 
-      for (const query of breakerQueries) {
-        if (breakerTracks.length >= breakerTarget) break;
-        const result = await spotify.searchTracks(query, 30).catch(() => null);
-        const items = result?.tracks?.items ?? [];
-        for (const track of items) {
-          if (breakerTracks.length >= breakerTarget) break;
-          const artistName = track.artists[0]?.name ?? "";
-          const artistNorm = normalizeForCompare(artistName);
-          if (recentSet.has(`${track.name}|||${artistName}`)) continue;
-          if (repeatedArtistNorms.has(artistNorm)) continue;
-          if (existingIds.has(track.id)) continue;
-          existingIds.add(track.id);
-          breakerTracks.push(resolveSpotifyDiscoveryTrack(track, `Loop breaker — taste-adjacent via "${query}"`));
+      for (const query of strictQueries) {
+        if (resetCandidates.length >= counts.total) break;
+        const result = await spotify.searchTracks(query, 25).catch(() => null);
+        for (const track of result?.tracks?.items ?? []) {
+          if (resetCandidates.length >= counts.total) break;
+          addResetTrack(track, query, true);
         }
       }
 
-      // If Spotify search is sparse for a niche taste, relax the dominant-artist
-      // filter but still avoid exact recent tracks and duplicates.
-      if (breakerTracks.length < Math.ceil(breakerTarget * 0.5)) {
-        for (const query of breakerQueries) {
-          if (breakerTracks.length >= breakerTarget) break;
-          const result = await spotify.searchTracks(query, 30).catch(() => null);
-          const items = result?.tracks?.items ?? [];
-          for (const track of items) {
-            if (breakerTracks.length >= breakerTarget) break;
-            const artistName = track.artists[0]?.name ?? "";
-            if (recentSet.has(`${track.name}|||${artistName}`)) continue;
-            if (existingIds.has(track.id)) continue;
-            existingIds.add(track.id);
-            breakerTracks.push(resolveSpotifyDiscoveryTrack(track, `Fresh reset — outside your recent repeats`));
+      // Relax artist familiarity only after the hard track blockers have done
+      // their job. This keeps niche tastes from returning too few songs while
+      // still refusing recent/top-track repeats.
+      if (resetCandidates.length < Math.ceil(counts.total * 0.75)) {
+        for (const query of strictQueries) {
+          if (resetCandidates.length >= counts.total) break;
+          const result = await spotify.searchTracks(query, 25).catch(() => null);
+          for (const track of result?.tracks?.items ?? []) {
+            if (resetCandidates.length >= counts.total) break;
+            addResetTrack(track, query, false);
           }
         }
       }
 
-      const comfortTracks = comfortRows.map((track) =>
-        resolveSpotifyTrack(track, "anchor", "Comfort anchor — familiar taste, but not in your repeat loop")
-      );
-      const forgottenTracks = forgottenRows.map((track) =>
-        resolveSpotifyTrack(track, "groove", "Forgotten favorite — long-term taste you have not played recently")
-      );
+      const rankedResetRows = resetCandidates
+        .map((item, index) => ({
+          ...item,
+          index,
+          score: scoreCandidateTrack({ track: item.track, era: "classic" }, breakScoreContext)
+            + (item.strict ? 10 : 0)
+            - Math.max(0, (item.track.popularity ?? 50) - 85),
+        }))
+        .sort((a, b) => b.score - a.score || a.index - b.index)
+        .slice(0, counts.total);
+
+      const comfortTracks = rankedResetRows.slice(0, comfortTarget).map(({ track, query }) => ({
+        ...resolveSpotifyTrack(track, "anchor", "Comfort anchor — shares your taste DNA without replaying your recent loop"),
+        reason: `Comfort anchor — adjacent to "${query}", not a recent/top repeat`,
+      }));
+      const forgottenTracks = rankedResetRows.slice(comfortTarget, comfortTarget + forgottenTarget).map(({ track, query }) => ({
+        ...resolveSpotifyTrack(track, "groove", "Taste bridge — familiar genre lane, fresh track choice"),
+        reason: `Taste bridge — close to your ${query} lane, but outside your blocked repeats`,
+      }));
+      const breakerTracks = rankedResetRows.slice(comfortTarget + forgottenTarget).map(({ track, query }) => ({
+        ...resolveSpotifyDiscoveryTrack(track, `Loop breaker — fresh edge from "${query}"`),
+      }));
       const allTracks = sequencePlaylist(
         [...comfortTracks, ...forgottenTracks, ...breakerTracks].slice(0, counts.total),
         "build",
