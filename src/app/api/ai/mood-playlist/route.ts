@@ -1278,7 +1278,7 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      if (escapePoolTracks.length >= Math.min(6, counts.total)) {
+      if (escapePoolTracks.length > 0) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset came from your Escape Pool: tracks already mapped to your taste, with recent plays and top repeats blocked.`;
         return buildResponse(
           sequencePlaylist(escapePoolTracks.slice(0, counts.total), "build"),
@@ -1288,6 +1288,20 @@ export async function POST(request: NextRequest) {
           cacheKey,
         );
       }
+
+      after(async () => {
+        await refreshEscapePool(user.id, spotify, admin).catch((err) => {
+          console.warn("[break-loop] Background Escape Pool refresh skipped:", err);
+        });
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "Your Escape Pool is still warming up. Sync Spotify once, then try Break My Loop again in a moment.",
+        },
+        { status: 503 },
+      );
 
       const breakScoreContext: ScoreContext = {
         intent: { ...breakIntent, freshness: "mixed" },

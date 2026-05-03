@@ -73,6 +73,13 @@ function numericScore(value: number | string | null | undefined): number {
   return 0;
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 function escapeRowToTrack(row: EscapePoolRow): SpotifyTrack {
   const artistNames = row.artist_names ?? [];
   const artistIds = row.artist_ids ?? [];
@@ -196,21 +203,25 @@ export async function refreshEscapePool(
   const artists = (topArtists ?? []).slice(0, 10);
   const genres = [...new Set(artists.flatMap((artist) => artist.genres ?? []))].slice(0, 10);
   const searchQueries = [
-    ...artists.slice(0, 6).flatMap((artist) => [
+    ...artists.slice(0, 4).flatMap((artist) => [
       `${artist.artist_name} radio`,
       `${artist.artist_name} deep cuts`,
     ]),
-    ...genres.slice(0, 6).map((genre) => `${genre.replace(/-/g, " ")} fresh`),
-  ].slice(0, 18);
+    ...genres.slice(0, 4).map((genre) => `${genre.replace(/-/g, " ")} fresh`),
+  ].slice(0, 12);
 
   const searchResults = await Promise.allSettled(
     searchQueries.map((query) =>
-      spotify.searchTracks(query, 20).then((result) => ({ query, result }))
+      withTimeout(
+        spotify.searchTracks(query, 12).then((result) => ({ query, result })),
+        2_800,
+        null,
+      )
     )
   );
 
   for (const result of searchResults) {
-    if (result.status !== "fulfilled") continue;
+    if (result.status !== "fulfilled" || result.value === null) continue;
     for (const track of result.value.result.tracks.items.slice(0, 12)) {
       if (seen.has(track.id)) continue;
       seen.add(track.id);
@@ -218,7 +229,7 @@ export async function refreshEscapePool(
     }
   }
 
-  return safeUpsertPoolRows(admin, rows.slice(0, 300));
+  return safeUpsertPoolRows(admin, rows.slice(0, 180));
 }
 
 export async function selectEscapePoolTracks(
