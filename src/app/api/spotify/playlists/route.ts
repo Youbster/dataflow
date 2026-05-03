@@ -57,7 +57,7 @@ async function addTracksToSpotifyPlaylist(
 ) {
   const batchSize = 100;
   for (let i = 0; i < trackUris.length; i += batchSize) {
-    await spotifyFetch(`/playlists/${playlistId}/tracks`, token, {
+    await spotifyFetch(`/playlists/${playlistId}/items`, token, {
       method: "POST",
       body: JSON.stringify({ uris: trackUris.slice(i, i + batchSize) }),
     });
@@ -66,9 +66,9 @@ async function addTracksToSpotifyPlaylist(
 
 export async function POST(request: Request) {
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!session) {
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -92,7 +92,7 @@ export async function POST(request: Request) {
     const { data: prefs } = await admin
       .from("user_preferences")
       .select("spotify_scopes")
-      .eq("user_id", session.user.id)
+      .eq("user_id", user.id)
       .single();
 
     let canCreatePrivate = true;
@@ -116,9 +116,9 @@ export async function POST(request: Request) {
     // Reconnect may have just written a wider-scope token. Evict any old
     // in-memory token so playlist writes don't reuse a pre-reconnect token.
     if (prefs?.spotify_scopes) {
-      invalidateTokenCache(session.user.id);
+      invalidateTokenCache(user.id);
     }
-    let token = await getValidSpotifyToken(session.user.id);
+    let token = await getValidSpotifyToken(user.id);
 
     // Use /me/playlists — simpler and avoids user ID mismatch issues
     const makePublic = !canCreatePrivate && canCreatePublic;
@@ -133,8 +133,8 @@ export async function POST(request: Request) {
         await addTracksToSpotifyPlaylist(playlist.id, playableUris, token);
       } catch (trackErr) {
         if (trackErr instanceof SpotifyApiError && trackErr.status === 403) {
-          invalidateTokenCache(session.user.id);
-          token = await getValidSpotifyToken(session.user.id);
+          invalidateTokenCache(user.id);
+          token = await getValidSpotifyToken(user.id);
           await addTracksToSpotifyPlaylist(playlist.id, playableUris, token);
         } else {
           throw trackErr;
@@ -166,7 +166,7 @@ export async function POST(request: Request) {
         .from("generated_playlists")
         .update({ spotify_playlist_id: playlist.id, is_saved_to_spotify: true })
         .eq("id", playlistId)
-        .eq("user_id", session.user.id);
+        .eq("user_id", user.id);
     }
 
     return NextResponse.json({
