@@ -185,19 +185,23 @@ export default function SocialPage() {
                         {user.username ? `@${user.username}` : "No username set"}
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={user.isFollowing}
-                      onClick={() => handleFollow(user.id)}
-                    >
-                      {user.isFollowing ? (
-                        <Check className="w-3.5 h-3.5 mr-1" />
-                      ) : (
+                    {user.isFollowing ? (
+                      <Link href={`/social/compare/${user.id}`}>
+                        <Button size="sm" variant="outline">
+                          <GitCompare className="w-3.5 h-3.5 mr-1" />
+                          Compare
+                        </Button>
+                      </Link>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleFollow(user.id)}
+                      >
                         <UserPlus className="w-3.5 h-3.5 mr-1" />
-                      )}
-                      {user.isFollowing ? "Following" : "Follow"}
-                    </Button>
+                        Follow
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
