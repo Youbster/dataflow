@@ -89,6 +89,24 @@ interface CachedPlaylist {
   expiresAt: number;
 }
 
+interface SpotifyAlbumItem {
+  id: string;
+  name: string;
+  release_date: string;
+  images: SpotifyTrack["album"]["images"];
+}
+
+interface SpotifyAlbumTracksResponse {
+  items: Array<{
+    id: string | null;
+    name: string;
+    uri: string;
+    artists: SpotifyTrack["artists"];
+    duration_ms: number;
+    preview_url: string | null;
+  }>;
+}
+
 type GenerationGoal = "build_vibe" | "break_loop";
 type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
 
@@ -116,6 +134,12 @@ function normalizeToken(value: string): string {
 
 function trackIdentity(trackName: string, artistName: string): string {
   return normalizeForCompare(`${trackName}|||${artistName}`);
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -177,6 +201,76 @@ async function searchTracksForGeneration(
 
     return response.json();
   }
+}
+
+async function spotifyAppGet<T>(endpoint: string): Promise<T> {
+  const token = await getSpotifyAppToken();
+  const response = await fetch(`${SPOTIFY_API_BASE}${endpoint}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Spotify app GET ${endpoint} failed: ${await response.text()}`);
+  }
+
+  return response.json();
+}
+
+async function getArtistCatalogTracks(artistIds: string[]): Promise<SpotifyTrack[]> {
+  const uniqueArtistIds = [...new Set(artistIds.filter(Boolean))].slice(0, 8);
+  if (uniqueArtistIds.length === 0) return [];
+
+  const albumResponses = await Promise.allSettled(
+    uniqueArtistIds.map((artistId) =>
+      spotifyAppGet<{ items: SpotifyAlbumItem[] }>(
+        `/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single&market=US&limit=6`,
+      )
+    )
+  );
+  const albumIds = [
+    ...new Set(
+      albumResponses
+        .filter((result): result is PromiseFulfilledResult<{ items: SpotifyAlbumItem[] }> => result.status === "fulfilled")
+        .flatMap((result) => result.value.items)
+        .sort((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? ""))
+        .map((album) => album.id)
+        .filter(Boolean)
+    ),
+  ].slice(0, 18);
+
+  if (albumIds.length === 0) return [];
+
+  const albumTrackResponses = await Promise.allSettled(
+    albumIds.map((albumId) =>
+      spotifyAppGet<SpotifyAlbumTracksResponse>(
+        `/albums/${encodeURIComponent(albumId)}/tracks?market=US&limit=20`,
+      )
+    )
+  );
+  const trackIds = [
+    ...new Set(
+      albumTrackResponses
+        .filter((result): result is PromiseFulfilledResult<SpotifyAlbumTracksResponse> => result.status === "fulfilled")
+        .flatMap((result) => result.value.items)
+        .map((track) => track.id)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ].slice(0, 120);
+
+  if (trackIds.length === 0) return [];
+
+  const trackResponses = await Promise.allSettled(
+    chunkArray(trackIds, 50).map((ids) =>
+      spotifyAppGet<{ tracks: Array<SpotifyTrack | null> }>(
+        `/tracks?market=US&ids=${ids.map(encodeURIComponent).join(",")}`,
+      )
+    )
+  );
+
+  return trackResponses
+    .filter((result): result is PromiseFulfilledResult<{ tracks: Array<SpotifyTrack | null> }> => result.status === "fulfilled")
+    .flatMap((result) => result.value.tracks)
+    .filter((track): track is SpotifyTrack => track !== null);
 }
 
 function cachedTrackToSpotifyTrack(row: CachedTopTrackRow | CachedHistoryRow): SpotifyTrack {
@@ -1163,6 +1257,7 @@ export async function POST(request: NextRequest) {
       const resetCandidates: ResetCandidate[] = [];
       const existingIds = new Set<string>();
       const artistPickCounts = new Map<string, number>();
+      const maxPicksPerArtist = breakLoopMode === "near_taste" ? 3 : 2;
       const addResetTrack = (track: SpotifyTrack, query: string, strict: boolean) => {
         const artistName = track.artists[0]?.name ?? "";
         const artistNorm = normalizeForCompare(artistName);
@@ -1171,7 +1266,7 @@ export async function POST(request: NextRequest) {
         if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return false;
         if (strict && repeatedArtistNorms.has(artistNorm)) return false;
         if (strict && modeConfig.strictBlocksKnownArtists && knownArtistNorms.has(artistNorm)) return false;
-        if ((artistPickCounts.get(artistNorm) ?? 0) >= 2) return false;
+        if ((artistPickCounts.get(artistNorm) ?? 0) >= maxPicksPerArtist) return false;
         existingIds.add(track.id);
         artistPickCounts.set(artistNorm, (artistPickCounts.get(artistNorm) ?? 0) + 1);
         resetCandidates.push({ track, query, strict });
@@ -1209,6 +1304,17 @@ export async function POST(request: NextRequest) {
         .map((q) => q.trim())
         .filter((q, index, arr) => q.length > 0 && arr.indexOf(q) === index)
         .slice(0, 8);
+      const nearTasteArtistQueries = breakLoopMode === "near_taste"
+        ? uniqueStrings(
+            shortArtists.slice(0, 8).flatMap((artist) => [
+              `${artist.name} deep cuts`,
+              `${artist.name} radio`,
+              `${artist.name} remix`,
+              `${artist.name} underrated`,
+            ]),
+            12,
+          )
+        : [];
       const aiAskFor = Math.min(14, Math.max(counts.total, 10));
       const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
 
@@ -1301,6 +1407,29 @@ Return ONLY valid JSON:
         for (const { track, query } of relaxedResults) {
           if (resetCandidates.length >= counts.total) break;
           addResetTrack(track, query, false);
+        }
+      }
+
+      if (resetCandidates.length < counts.total && nearTasteArtistQueries.length > 0) {
+        const nearTasteResults = await searchBatch(nearTasteArtistQueries, 35);
+        for (const { track, query } of nearTasteResults) {
+          if (resetCandidates.length >= counts.total) break;
+          addResetTrack(track, query, false);
+        }
+      }
+
+      if (resetCandidates.length < Math.min(counts.total, 12)) {
+        const catalogTracks = await withTimeout(
+          getArtistCatalogTracks(shortArtists.map((artist) => artist.id)).catch((err) => {
+            console.warn("[break-loop] Artist catalog fallback failed:", err);
+            return [] as SpotifyTrack[];
+          }),
+          5_500,
+          [] as SpotifyTrack[],
+        );
+        for (const track of catalogTracks) {
+          if (resetCandidates.length >= counts.total) break;
+          addResetTrack(track, "deep catalog from your taste", false);
         }
       }
 
