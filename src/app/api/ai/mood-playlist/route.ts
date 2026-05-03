@@ -84,6 +84,13 @@ function trackIdentity(trackName: string, artistName: string): string {
   return normalizeForCompare(`${trackName}|||${artistName}`);
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 function uniqueStrings(values: string[], limit = 12): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -774,12 +781,11 @@ export async function POST(request: NextRequest) {
         modeConfig.label,
         targetDirection,
       ].filter(Boolean).join(" — ");
-      const breakIntent = await parsePlaylistIntent(
+      const breakIntent = buildFallbackIntent(
         modeRequestStr,
         "mixed",
         intensity,
-        constraintsStr,
-        genreLock,
+        genreLock ?? breakLoopTarget,
         artistLock,
       );
       const breakArtistGenreMap = new Map<string, string[]>();
@@ -807,25 +813,27 @@ export async function POST(request: NextRequest) {
         blockTrack(track.name, track.artists[0]?.name ?? "", track.id);
       }
 
-      try {
-        const historySince = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: loopHistory } = await createAdminClient()
-          .from("user_listening_history")
-          .select("spotify_track_id, track_name, artist_names")
-          .eq("user_id", user.id)
-          .gte("played_at", historySince)
-          .limit(300);
+      const loopHistory = await withTimeout(
+        (async () => {
+          const historySince = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
+          const { data } = await createAdminClient()
+            .from("user_listening_history")
+            .select("spotify_track_id, track_name, artist_names")
+            .eq("user_id", user.id)
+            .gte("played_at", historySince)
+            .limit(300);
+          return data ?? [];
+        })().catch(() => []),
+        2_500,
+        [],
+      );
 
-        for (const item of loopHistory ?? []) {
-          blockTrack(
-            (item.track_name as string | null) ?? "",
-            ((item.artist_names as string[] | null)?.[0]) ?? "",
-            (item.spotify_track_id as string | null) ?? null,
-          );
-        }
-      } catch {
-        // Spotify's recent/top-track blockers still protect the reset if the
-        // synced history table is cold or Supabase is slow on the free tier.
+      for (const item of loopHistory) {
+        blockTrack(
+          (item.track_name as string | null) ?? "",
+          ((item.artist_names as string[] | null)?.[0]) ?? "",
+          (item.spotify_track_id as string | null) ?? null,
+        );
       }
 
       const repeatedArtistNorms = new Set(
@@ -897,20 +905,9 @@ export async function POST(request: NextRequest) {
       const strictQueries = [...tasteQueries, ...breakerQueries]
         .map((q) => q.trim())
         .filter((q, index, arr) => q.length > 0 && arr.indexOf(q) === index)
-        .slice(0, 12);
-
-      for (const query of strictQueries) {
-        if (resetCandidates.length >= counts.total) break;
-        const result = await spotify.searchTracks(query, 25).catch(() => null);
-        for (const track of result?.tracks?.items ?? []) {
-          if (resetCandidates.length >= counts.total) break;
-          addResetTrack(track, query, true);
-        }
-      }
-
-      if (resetCandidates.length < Math.min(counts.total, 8)) {
-        const askFor = Math.min(20, counts.total * 2);
-        const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
+        .slice(0, 8);
+      const aiAskFor = Math.min(14, Math.max(counts.total, 10));
+      const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
 
 REQUEST: "${requestStr}"
 MODE: ${modeConfig.label}
@@ -922,7 +919,7 @@ LISTENER TASTE DNA:
 - Favorite artists to use only as reference, not suggestions: ${topArtists || "none"}
 - Hard-block these tracks completely: ${blockedTrackLabels.join("; ") || "none"}${constraintsStr}
 
-Suggest ${askFor} real Spotify tracks that follow the MODE and DIRECTION, fit the user's taste, and stay outside the blocked list.
+Suggest ${aiAskFor} real Spotify tracks that follow the MODE and DIRECTION, fit the user's taste, and stay outside the blocked list.
 
 Return ONLY valid JSON:
 {
@@ -931,7 +928,8 @@ Return ONLY valid JSON:
   ]
 }`;
 
-        try {
+      const aiResetPromise = withTimeout(
+        (async () => {
           const aiReset = await getOpenAI().chat.completions.create({
             model: FAST_MODEL,
             max_tokens: 900,
@@ -946,17 +944,49 @@ Return ONLY valid JSON:
             ? (JSON.parse(match) as { tracks?: { track: string; artist: string; reason?: string }[] }).tracks ?? []
             : [];
           const resolved = await Promise.allSettled(
-            suggestions.slice(0, askFor).map((suggestion) => spotify.findTrack(suggestion.track, suggestion.artist))
+            suggestions.slice(0, 8).map((suggestion) => spotify.findTrack(suggestion.track, suggestion.artist))
           );
-          for (const result of resolved) {
-            if (resetCandidates.length >= counts.total) break;
-            if (result.status !== "fulfilled" || !result.value) continue;
-            if (!addResetTrack(result.value, "curated reset", true)) {
-              addResetTrack(result.value, "curated reset", false);
-            }
-          }
-        } catch (err) {
+          return resolved
+            .filter((result): result is PromiseFulfilledResult<SpotifyTrack | null> => result.status === "fulfilled")
+            .map((result) => result.value)
+            .filter((track): track is SpotifyTrack => track !== null);
+        })().catch((err) => {
           console.error("[break-loop] AI reset fallback failed:", err);
+          return [] as SpotifyTrack[];
+        }),
+        10_000,
+        [] as SpotifyTrack[],
+      );
+
+      const searchBatch = async (queries: string[], limit: number) => {
+        const results = await withTimeout(
+          Promise.allSettled(
+            queries.map((query) =>
+              spotify.searchTracks(query, limit).then((result) => ({ query, result }))
+            )
+          ),
+          8_000,
+          [],
+        );
+
+        return results
+          .filter((item): item is PromiseFulfilledResult<{ query: string; result: Awaited<ReturnType<typeof spotify.searchTracks>> }> => item.status === "fulfilled")
+          .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
+      };
+
+      const strictResults = await searchBatch(strictQueries, 25);
+      for (const { track, query } of strictResults) {
+        if (resetCandidates.length >= counts.total) break;
+        addResetTrack(track, query, true);
+      }
+
+      if (resetCandidates.length < Math.min(counts.total, 10)) {
+        const aiTracks = await aiResetPromise;
+        for (const track of aiTracks) {
+          if (resetCandidates.length >= counts.total) break;
+          if (!addResetTrack(track, "curated reset", true)) {
+            addResetTrack(track, "curated reset", false);
+          }
         }
       }
 
@@ -964,24 +994,18 @@ Return ONLY valid JSON:
       // their job. This keeps niche tastes from returning too few songs while
       // still refusing recent/top-track repeats.
       if (resetCandidates.length < Math.ceil(counts.total * 0.75)) {
-        for (const query of strictQueries) {
+        const relaxedResults = await searchBatch(strictQueries.slice(0, 6), 25);
+        for (const { track, query } of relaxedResults) {
           if (resetCandidates.length >= counts.total) break;
-          const result = await spotify.searchTracks(query, 25).catch(() => null);
-          for (const track of result?.tracks?.items ?? []) {
-            if (resetCandidates.length >= counts.total) break;
-            addResetTrack(track, query, false);
-          }
+          addResetTrack(track, query, false);
         }
       }
 
       if (resetCandidates.length === 0) {
-        for (const query of ["new music friday", "fresh finds", "indie pop", "dance hits", "alternative hits", "electronic hits"]) {
+        const broadResults = await searchBatch(["new music friday", "fresh finds", "indie pop", "dance hits", "alternative hits", "electronic hits"], 30);
+        for (const { track, query } of broadResults) {
           if (resetCandidates.length >= counts.total) break;
-          const result = await spotify.searchTracks(query, 50).catch(() => null);
-          for (const track of result?.tracks?.items ?? []) {
-            if (resetCandidates.length >= counts.total) break;
-            addResetTrack(track, query, false);
-          }
+          addResetTrack(track, query, false);
         }
       }
 
