@@ -73,6 +73,14 @@ function numericScore(value: number | string | null | undefined): number {
   return 0;
 }
 
+function stableHash(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
@@ -202,6 +210,36 @@ export async function refreshEscapePool(
 
   const artists = (topArtists ?? []).slice(0, 10);
   const genres = [...new Set(artists.flatMap((artist) => artist.genres ?? []))].slice(0, 10);
+  const artistTopTrackResults = await Promise.allSettled(
+    artists.slice(0, 8).map((artist) =>
+      withTimeout(
+        spotify.getArtistTopTracks(artist.spotify_artist_id).then((tracks) => ({ artist, tracks })),
+        2_800,
+        null,
+      )
+    )
+  );
+
+  for (const result of artistTopTrackResults) {
+    if (result.status !== "fulfilled" || result.value === null) continue;
+    const artistGenres = result.value.artist.genres ?? [];
+    for (const track of result.value.tracks.slice(0, 8)) {
+      if (seen.has(track.id)) continue;
+      seen.add(track.id);
+      rows.push(
+        trackToPoolRow(
+          userId,
+          track,
+          "artist_top_track",
+          result.value.artist.artist_name,
+          68,
+          Math.max(18, 52 - (track.popularity ?? 50) / 2),
+          artistGenres,
+        )
+      );
+    }
+  }
+
   const searchQueries = [
     ...artists.slice(0, 4).flatMap((artist) => [
       `${artist.artist_name} radio`,
@@ -225,11 +263,16 @@ export async function refreshEscapePool(
     for (const track of result.value.result.tracks.items.slice(0, 12)) {
       if (seen.has(track.id)) continue;
       seen.add(track.id);
-      rows.push(trackToPoolRow(userId, track, "taste_search", result.value.query, 54, 58, genres));
+      const source = result.value.query.includes("deep cuts")
+        ? "artist_deep_cut"
+        : result.value.query.includes("radio")
+        ? "artist_radio"
+        : "genre_fresh";
+      rows.push(trackToPoolRow(userId, track, source, result.value.query, 54, 58, genres));
     }
   }
 
-  return safeUpsertPoolRows(admin, rows.slice(0, 180));
+  return safeUpsertPoolRows(admin, rows.slice(0, 260));
 }
 
 export async function selectEscapePoolTracks(
@@ -270,9 +313,23 @@ export async function selectEscapePoolTracks(
       );
       let score = numericScore(row.affinity_score) + numericScore(row.novelty_score);
       if (context.mode === "break_loop") score += 30;
-      if (context.breakLoopMode === "near_taste") score += row.source === "top_track" ? -35 : 12;
+      if (context.breakLoopMode === "near_taste") {
+        score += row.source === "top_track" ? -45 : 0;
+        if (["artist_radio", "artist_deep_cut", "artist_top_track"].includes(row.source)) score += 18;
+      }
+      if (context.breakLoopMode === "energy_shift") {
+        if (["genre_fresh", "artist_radio"].includes(row.source)) score += 14;
+        if (context.intensity === "high" && /\b(dance|club|remix|workout|edit|upbeat|banger|party)\b/.test(haystack)) score += 20;
+        if (context.intensity === "low" && /\b(chill|soft|acoustic|ambient|slow|piano|downtempo)\b/.test(haystack)) score += 20;
+      }
       if (context.breakLoopMode === "new_lane" || context.breakLoopMode === "surprise") {
         if (context.knownArtistNorms?.has(artistNorm)) score -= 24;
+        if (row.source === "genre_fresh") score += 20;
+        if (row.source === "artist_top_track") score -= 10;
+      }
+      if (context.breakLoopMode === "surprise") {
+        score += numericScore(row.novelty_score);
+        score -= Math.max(0, (row.popularity ?? 50) - 70);
       }
       if (context.repeatedArtistNorms?.has(artistNorm)) score -= 20;
       for (const token of requestTokens) if (haystack.includes(token)) score += 10;
@@ -285,6 +342,7 @@ export async function selectEscapePoolTracks(
         else score -= Math.max(0, 20 - ageDays);
       }
       score -= Math.max(0, (row.popularity ?? 50) - 86);
+      score += stableHash(`${context.breakLoopMode ?? context.mode}:${row.spotify_track_id}`) % 17;
 
       return { row, index, artistNorm, score };
     })
