@@ -1,4 +1,4 @@
-import { openai, FAST_MODEL } from "./client";
+import { getOpenAI, FAST_MODEL } from "./client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildStalenessPrompt,
@@ -50,7 +50,7 @@ export async function suggestFreshAlternatives(
   const tasteProfile = buildTasteProfile(topTracks || [], topArtists || []);
   const prompt = buildStalenessPrompt(staleTracks, tasteProfile);
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 4096,
     messages: [

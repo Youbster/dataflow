@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildTasteProfile,
@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
     const season = SEASONS[now.getMonth()];
 
     // Run forecast + optional cleanser in parallel
-    const forecastPromise = openai.chat.completions.create({
+    const forecastPromise = getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 1200,
       messages: [
@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
     });
 
     const cleanserPromise = burnoutTrack
-      ? openai.chat.completions.create({
+      ? getOpenAI().chat.completions.create({
           model: FAST_MODEL,
           max_tokens: 600,
           messages: [

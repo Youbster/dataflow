@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 
 function fmt(tracks: { track_name: string; artist_names: string[] }[], limit = 15) {
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       .map(t => `"${t.name}" by ${t.artist} (${t.count}×)`)
       .join("; ");
 
-    const aiRes = await openai.chat.completions.create({
+    const aiRes = await getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 1000,
       messages: [

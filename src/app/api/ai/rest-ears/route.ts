@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateStalenessScores } from "@/lib/staleness/calculator";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM, buildTasteProfile } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 
@@ -78,7 +78,7 @@ Return ONLY valid JSON:
   ]
 }`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 3000,
       messages: [

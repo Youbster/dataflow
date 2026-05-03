@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM, buildTasteProfile, buildArtistDivePrompt } from "@/lib/claude/prompts";
 
 export async function POST(request: Request) {
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const tasteProfile = buildTasteProfile(tracks ?? [], artists ?? []);
     const prompt = buildArtistDivePrompt(artistName.trim(), tasteProfile);
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 1000,
       messages: [

@@ -1,4 +1,4 @@
-import { openai, FAST_MODEL } from "./client";
+import { getOpenAI, FAST_MODEL } from "./client";
 import {
   MUSIC_EXPERT_SYSTEM,
   buildInsightsPrompt,
@@ -48,7 +48,7 @@ export async function generateInsights(userId: string): Promise<Insight[]> {
     uniqueArtists
   );
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 1024,
     messages: [

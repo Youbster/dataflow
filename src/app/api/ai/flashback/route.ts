@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 
 export async function POST() {
@@ -19,7 +19,7 @@ export async function POST() {
     const trackList = (longTracks ?? []).map(t => `"${t.track_name}" by ${t.artist_names?.[0] ?? "Unknown"}`).join("; ");
     const artistList = (longArtists ?? []).slice(0, 8).map(a => a.artist_name).join(", ");
 
-    const aiRes = await openai.chat.completions.create({
+    const aiRes = await getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 800,
       messages: [

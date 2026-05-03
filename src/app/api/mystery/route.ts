@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 
@@ -47,7 +47,7 @@ async function verifyOnSpotify(
 }
 
 async function generateSuggestion(prompt: string): Promise<{ trackName: string; artistName: string; reason: string } | null> {
-  const aiRes = await openai.chat.completions.create({
+  const aiRes = await getOpenAI().chat.completions.create({
     model: FAST_MODEL,
     max_tokens: 300,
     messages: [

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 
 interface ArtistRow { artist_name: string; genres: string[] }
@@ -66,7 +66,7 @@ export async function GET() {
       const fading = [...genreDNA].sort((a, b) => a.delta - b.delta)[0]?.genre ?? null;
 
       try {
-        const aiRes = await openai.chat.completions.create({
+        const aiRes = await getOpenAI().chat.completions.create({
           model: FAST_MODEL,
           max_tokens: 200,
           messages: [

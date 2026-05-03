@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
@@ -181,7 +181,7 @@ async function parsePlaylistIntent(
   const fallback = buildFallbackIntent(requestStr, familiarity, intensity, genreLock, artistLock);
 
   try {
-    const aiPromise = openai.chat.completions.create({
+    const aiPromise = getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 220,
       messages: [
@@ -688,7 +688,7 @@ Return ONLY valid JSON (no markdown, no extra text):
   ]
 }`;
 
-      const freshAI = await openai.chat.completions.create({
+      const freshAI = await getOpenAI().chat.completions.create({
         model: FAST_MODEL,
         max_tokens: 1000,
         messages: [

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM, buildTasteProfile } from "@/lib/claude/prompts";
 
 export async function GET() {
@@ -79,7 +79,7 @@ export async function GET() {
       const tasteProfile = buildTasteProfile(shortTracks ?? [], shortArtists ?? []);
       const topArtistNames = tasteProfile.topArtists.slice(0, 5).map(a => a.name).join(", ");
       try {
-        const aiRes = await openai.chat.completions.create({
+        const aiRes = await getOpenAI().chat.completions.create({
           model: FAST_MODEL,
           max_tokens: 150,
           messages: [

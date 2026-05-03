@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { openai, FAST_MODEL } from "@/lib/claude/client";
+import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM, buildTasteProfile, buildWrappedPrompt } from "@/lib/claude/prompts";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -98,7 +98,7 @@ export async function POST() {
     const tasteProfile = buildTasteProfile(shortTracks ?? [], shortArtists ?? []);
     const prompt = buildWrappedPrompt(monthName, stats, topTrack, topArtist, weekBreakdown, tasteProfile);
 
-    const aiRes = await openai.chat.completions.create({
+    const aiRes = await getOpenAI().chat.completions.create({
       model: FAST_MODEL,
       max_tokens: 800,
       messages: [
