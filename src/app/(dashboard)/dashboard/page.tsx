@@ -87,6 +87,13 @@ interface GeneratedPlaylist {
   playlistId?: string | null;
 }
 
+interface PlaylistJobStatus {
+  jobId: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  result: GeneratedPlaylist | null;
+  error: string | null;
+}
+
 interface HomeData {
   stats: { playsThisWeek: number; estimatedMinutes: number; uniqueArtists: number; topGenre: string | null };
   topGenres: string[];
@@ -164,6 +171,8 @@ export default function DashboardPage() {
   const [playlist, setPlaylist]       = useState<GeneratedPlaylist | null>(null);
   const [generationGoal, setGenerationGoal] = useState<GenerationGoal>("build_vibe");
   const [generatedDiscovery, setGeneratedDiscovery] = useState(false);
+  const [generationJobId, setGenerationJobId] = useState<string | null>(null);
+  const [generationStatus, setGenerationStatus] = useState<PlaylistJobStatus["status"] | null>(null);
   const [feedbackMode, setFeedbackMode] = useState(false);
   const [savedToSpotify, setSavedToSpotify] = useState(false);
   const [isSaving, setIsSaving]       = useState(false);
@@ -270,6 +279,38 @@ export default function DashboardPage() {
 
   const hasAdvanced = vocals !== "any" || language !== "any" || genreLock.trim() !== "" || artistLock.trim() !== "";
 
+  async function wait(ms: number) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function pollPlaylistJob(jobId: string): Promise<GeneratedPlaylist> {
+    const startedAt = Date.now();
+    const maxWaitMs = 120_000;
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      await wait(1_500);
+      const res = await fetch(`/api/ai/mood-playlist/status?jobId=${encodeURIComponent(jobId)}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<PlaylistJobStatus> & { error?: string };
+
+      if (!res.ok) {
+        throw new Error(data.error || `Could not read playlist job (${res.status})`);
+      }
+
+      if (data.status) setGenerationStatus(data.status);
+      if (data.status === "completed") {
+        if (!data.result?.tracks?.length) throw new Error("Playlist finished empty. Try a more specific mood or genre.");
+        return data.result;
+      }
+      if (data.status === "failed") {
+        throw new Error(data.error || "Playlist generation failed. Try a shorter duration or clearer genre.");
+      }
+    }
+
+    throw new Error("Still building after 2 minutes. Try again with a shorter duration or simpler request.");
+  }
+
   async function runPlaylistRequest({
     goal,
     prompt,
@@ -288,15 +329,16 @@ export default function DashboardPage() {
     setPhase("loading");
     setGenerationGoal(goal);
     setGeneratedDiscovery(discovery);
+    setGenerationJobId(null);
+    setGenerationStatus(null);
     setSavedToSpotify(false);
     setIsSaving(false);
     setFeedbackMode(false);
 
-    // Abort the request if the server doesn't respond within 28 seconds.
-    // Without this, a Vercel timeout sends HTTP 200 headers then never
-    // completes the body — fetch() never rejects and the spinner hangs forever.
+    // This request now only creates a generation job. It should return quickly;
+    // the heavy Spotify/OpenAI work is handled by a background worker and polled.
     const controller = new AbortController();
-    const abortTimer = setTimeout(() => controller.abort(), 28_000);
+    const abortTimer = setTimeout(() => controller.abort(), 10_000);
 
     try {
       const res = await fetch("/api/ai/mood-playlist", {
@@ -329,6 +371,16 @@ export default function DashboardPage() {
       }
 
       if (!res.ok) throw new Error((data.error as string) || `Error ${res.status}`);
+
+      if (typeof data.jobId === "string") {
+        setGenerationJobId(data.jobId);
+        setGenerationStatus((data.status as PlaylistJobStatus["status"]) ?? "queued");
+        const result = await pollPlaylistJob(data.jobId);
+        setPlaylist(result);
+        setPhase("result");
+        return;
+      }
+
       setPlaylist(data as unknown as GeneratedPlaylist);
       setPhase("result");
     } catch (err) {
@@ -336,7 +388,7 @@ export default function DashboardPage() {
       const msg =
         err instanceof Error
           ? err.name === "AbortError"
-            ? "Took too long — try a shorter duration or simpler request"
+            ? "Couldn't start playlist generation. Try again in a moment."
             : err.message
           : "Failed to generate playlist";
       toast.error(msg);
@@ -378,6 +430,8 @@ export default function DashboardPage() {
     setSavedToSpotify(false);
     setIsSaving(false);
     setGeneratedDiscovery(false);
+    setGenerationJobId(null);
+    setGenerationStatus(null);
     setGenerationGoal("build_vibe");
     setTimeout(() => textareaRef.current?.focus(), 100);
   }
@@ -760,6 +814,11 @@ export default function DashboardPage() {
                   ? "Scanning your taste DNA for artists you've never heard"
                   : "Reading your taste, blocking overplayed songs, finding the right picks"}
               </p>
+              {generationJobId && (
+                <p className="text-[11px] text-muted-foreground/70 mt-2">
+                  {generationStatus === "processing" ? "Working in the background" : "Queued"} · job {generationJobId.slice(0, 8)}
+                </p>
+              )}
             </div>
           </div>
         )}

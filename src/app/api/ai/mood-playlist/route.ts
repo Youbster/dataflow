@@ -58,6 +58,7 @@ interface CachedPlaylist {
 
 type GenerationGoal = "build_vibe" | "break_loop";
 type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
+type PlaylistJobStatus = "queued" | "processing" | "completed" | "failed";
 
 const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
 const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -89,6 +90,86 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
     promise,
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
   ]);
+}
+
+async function updatePlaylistJob(
+  jobId: string,
+  values: {
+    status: PlaylistJobStatus;
+    result_json?: unknown;
+    error?: string | null;
+    started_at?: string;
+    completed_at?: string;
+  },
+) {
+  await createAdminClient()
+    .from("playlist_generation_jobs")
+    .update({ ...values, updated_at: new Date().toISOString() })
+    .eq("id", jobId);
+}
+
+async function runPlaylistGenerationJob({
+  origin,
+  cookie,
+  body,
+  jobId,
+}: {
+  origin: string;
+  cookie: string;
+  body: Record<string, unknown>;
+  jobId: string;
+}) {
+  await updatePlaylistJob(jobId, {
+    status: "processing",
+    started_at: new Date().toISOString(),
+    error: null,
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 29_000);
+
+  try {
+    const response = await fetch(`${origin}/api/ai/mood-playlist`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cookie": cookie,
+        "x-playlist-worker": "1",
+        "x-playlist-job-id": jobId,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = result && typeof result === "object" && "error" in result
+        ? String((result as { error?: unknown }).error)
+        : `Playlist generation failed (${response.status})`;
+      throw new Error(message);
+    }
+
+    await updatePlaylistJob(jobId, {
+      status: "completed",
+      result_json: result,
+      completed_at: new Date().toISOString(),
+      error: null,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const message = err instanceof Error && err.name === "AbortError"
+      ? "Generation worker hit the Vercel time limit. Try 20 min or a more specific genre."
+      : err instanceof Error
+      ? err.message
+      : "Playlist generation failed";
+
+    await updatePlaylistJob(jobId, {
+      status: "failed",
+      error: message,
+      completed_at: new Date().toISOString(),
+    });
+  }
 }
 
 function uniqueStrings(values: string[], limit = 12): string[] {
@@ -668,6 +749,7 @@ async function resolveDiscoveryTracks(
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const isWorkerRequest = request.headers.get("x-playlist-worker") === "1";
   // getSession() decodes the JWT from the cookie locally — zero HTTP round-trips.
   // (getUser() would make an HTTP call to Supabase auth server every request.)
   const supabase = await createClient();
@@ -735,6 +817,41 @@ export async function POST(request: NextRequest) {
       playlistId: null,
       cached: true,
     });
+  }
+
+  if (!isWorkerRequest) {
+    const { data: job, error } = await createAdminClient()
+      .from("playlist_generation_jobs")
+      .insert({
+        user_id: user.id,
+        status: "queued",
+        request_body: body,
+      })
+      .select("id")
+      .single();
+
+    if (error || !job?.id) {
+      console.error("[mood-playlist] Job create failed:", error);
+      return NextResponse.json(
+        { error: "Couldn't start playlist generation. Try again in a moment." },
+        { status: 500 },
+      );
+    }
+
+    const cookie = request.headers.get("cookie") ?? "";
+    const origin = new URL(request.url).origin;
+    const jobId = String(job.id);
+
+    after(async () => {
+      await runPlaylistGenerationJob({
+        origin,
+        cookie,
+        body: body as Record<string, unknown>,
+        jobId,
+      });
+    });
+
+    return NextResponse.json({ jobId, status: "queued" }, { status: 202 });
   }
 
   try {
