@@ -5,7 +5,8 @@ import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
-import type { SpotifyTrack, SpotifyArtist } from "@/types/spotify";
+import { SPOTIFY_API_BASE, SPOTIFY_TOKEN_URL } from "@/lib/constants";
+import type { SpotifyTrack, SpotifyArtist, SpotifySearchResult } from "@/types/spotify";
 
 // Give Vercel up to 30 seconds for this function (Pro plan).
 // Hobby plan is capped at 10s regardless; the client-side AbortController
@@ -94,6 +95,7 @@ type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
 const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
 const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const PLAYLIST_CACHE_MAX_ENTRIES = 80;
+let SPOTIFY_APP_TOKEN: { token: string; expiresAt: number } | null = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -121,6 +123,60 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pro
     promise,
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
   ]);
+}
+
+async function getSpotifyAppToken(): Promise<string> {
+  if (SPOTIFY_APP_TOKEN && SPOTIFY_APP_TOKEN.expiresAt > Date.now() + 60_000) {
+    return SPOTIFY_APP_TOKEN.token;
+  }
+
+  const response = await fetch(SPOTIFY_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64")}`,
+    },
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Spotify app token failed: ${await response.text()}`);
+  }
+
+  const tokenResponse = (await response.json()) as { access_token: string; expires_in: number };
+  SPOTIFY_APP_TOKEN = {
+    token: tokenResponse.access_token,
+    expiresAt: Date.now() + tokenResponse.expires_in * 1000,
+  };
+  return tokenResponse.access_token;
+}
+
+async function searchTracksForGeneration(
+  spotify: ReturnType<typeof createSpotifyClient>,
+  query: string,
+  limit: number,
+): Promise<SpotifySearchResult> {
+  try {
+    return await spotify.searchTracks(query, limit);
+  } catch (userTokenErr) {
+    const token = await getSpotifyAppToken();
+    const response = await fetch(
+      `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+
+    if (!response.ok) {
+      const message = await response.text();
+      console.warn("[mood-playlist] Spotify generation search failed", {
+        query,
+        userTokenError: userTokenErr instanceof Error ? userTokenErr.message : String(userTokenErr),
+        appTokenError: message,
+      });
+      throw new Error(`Spotify search failed: ${message}`);
+    }
+
+    return response.json();
+  }
 }
 
 function cachedTrackToSpotifyTrack(row: CachedTopTrackRow | CachedHistoryRow): SpotifyTrack {
@@ -599,7 +655,7 @@ async function buildFastSearchPlaylist({
   const searchResults = await withTimeout(
     Promise.allSettled(
       queries.map((query) =>
-        spotify.searchTracks(query, 30).then((result) => ({ query, result }))
+        searchTracksForGeneration(spotify, query, 30).then((result) => ({ query, result }))
       )
     ),
     9_000,
@@ -639,7 +695,7 @@ async function buildFastSearchPlaylist({
   };
 
   const rows = searchResults
-    .filter((item): item is PromiseFulfilledResult<{ query: string; result: Awaited<ReturnType<typeof spotify.searchTracks>> }> => item.status === "fulfilled")
+    .filter((item): item is PromiseFulfilledResult<{ query: string; result: SpotifySearchResult }> => item.status === "fulfilled")
     .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
 
   for (const { track, query } of rows) addTrack(track, query, false);
@@ -1192,7 +1248,7 @@ Return ONLY valid JSON:
             .map((result) => result.value)
             .filter((track): track is SpotifyTrack => track !== null);
         })().catch((err) => {
-          console.error("[break-loop] AI reset fallback failed:", err);
+          console.warn("[break-loop] AI reset fallback failed:", err);
           return [] as SpotifyTrack[];
         }),
         4_000,
@@ -1203,7 +1259,7 @@ Return ONLY valid JSON:
         const results = await withTimeout(
           Promise.allSettled(
             queries.map((query) =>
-              spotify.searchTracks(query, limit).then((result) => ({ query, result }))
+              searchTracksForGeneration(spotify, query, limit).then((result) => ({ query, result }))
             )
           ),
           4_500,
@@ -1211,7 +1267,7 @@ Return ONLY valid JSON:
         );
 
         return results
-          .filter((item): item is PromiseFulfilledResult<{ query: string; result: Awaited<ReturnType<typeof spotify.searchTracks>> }> => item.status === "fulfilled")
+          .filter((item): item is PromiseFulfilledResult<{ query: string; result: SpotifySearchResult }> => item.status === "fulfilled")
           .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
       };
 
@@ -1311,9 +1367,37 @@ Return ONLY valid JSON:
       );
 
       if (allTracks.length === 0) {
+        const cachedFallback = sequencePlaylist(
+          [...longCandidates, ...shortCandidates]
+            .filter((track) => !recentSet.has(`${track.name}|||${track.artists[0]?.name ?? ""}`))
+            .slice(0, counts.total)
+            .map((track, index) => {
+              const section =
+                index < Math.max(1, Math.round(counts.total * 0.25))
+                  ? "anchor"
+                  : index < Math.max(2, Math.round(counts.total * 0.7))
+                  ? "groove"
+                  : "discovery";
+              return section === "discovery"
+                ? resolveSpotifyDiscoveryTrack(track, "Cached taste fallback outside your recent plays")
+                : resolveSpotifyTrack(track, section, "Cached taste fallback outside your recent plays");
+            }),
+          "build",
+        );
+
+        if (cachedFallback.length > 0) {
+          return buildResponse(
+            cachedFallback,
+            `Your ${modeConfig.label.toLowerCase()} loop reset used cached taste because Spotify search returned too few reset candidates. It still avoids your recent plays.`,
+            requestStr,
+            user.id,
+            cacheKey,
+          );
+        }
+
         return NextResponse.json(
-          { error: "Couldn't build a loop reset yet. Reconnect Spotify or sync more listening history, then try again." },
-          { status: 422 },
+          { error: "Spotify could not return playable tracks right now. Reconnect Spotify, then try again." },
+          { status: 502 },
         );
       }
 
@@ -1472,7 +1556,7 @@ Return ONLY valid JSON (no markdown, no extra text):
           console.log(`[fresh-discovery] fallback tier — query: "${query}", need ${targetCount - tracks.length} more`);
 
           try {
-            const sr = await spotify.searchTracks(query, 30);
+            const sr = await searchTracksForGeneration(spotify, query, 30);
             const items = sr.tracks?.items ?? [];
             console.log(`[fresh-discovery] "${query}" → ${items.length} results`);
 
@@ -1626,7 +1710,7 @@ Return ONLY valid JSON (no markdown, no extra text):
 
     const discoveryTracks = await (
       discoveryTarget > 0
-        ? spotify.searchTracks(discoveryQuery, 25).then((r) => {
+        ? searchTracksForGeneration(spotify, discoveryQuery, 25).then((r) => {
             const out: PlaylistTrack[] = [];
             for (const track of r.tracks.items) {
               if (out.length >= discoveryTarget) break;
