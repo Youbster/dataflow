@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getValidSpotifyToken } from "@/lib/spotify/token";
+import { getValidSpotifyToken, invalidateTokenCache } from "@/lib/spotify/token";
 import { SPOTIFY_API_BASE } from "@/lib/constants";
 
 async function spotifyFetch(url: string, token: string, options: RequestInit = {}) {
@@ -31,7 +31,6 @@ export async function POST(request: Request) {
   }
 
   try {
-    const token = await getValidSpotifyToken(session.user.id);
     const { playlistId, name, description, trackUris } = await request.json();
 
     // ── Pre-flight scope check — avoids creating an empty playlist we can't fill ──
@@ -58,6 +57,13 @@ export async function POST(request: Request) {
         );
       }
     }
+
+    // Reconnect may have just written a wider-scope token. Evict any old
+    // in-memory token so playlist writes don't reuse a pre-reconnect token.
+    if (prefs?.spotify_scopes) {
+      invalidateTokenCache(session.user.id);
+    }
+    const token = await getValidSpotifyToken(session.user.id);
 
     // Use /me/playlists — simpler and avoids user ID mismatch issues
     const playlist = await spotifyFetch("/me/playlists", token, {

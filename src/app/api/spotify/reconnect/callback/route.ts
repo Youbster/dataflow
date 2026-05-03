@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { encrypt } from "@/lib/spotify/token";
+import { encrypt, invalidateTokenCache, primeTokenCache } from "@/lib/spotify/token";
 
 /**
  * Handles the Spotify OAuth callback for the reconnect flow.
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
 
   const { access_token, refresh_token, expires_in, scope } = await tokenRes.json() as {
     access_token: string;
-    refresh_token: string;
+    refresh_token?: string;
     expires_in: number;
     scope: string;
   };
@@ -60,17 +60,25 @@ export async function GET(request: Request) {
 
   // Store fresh tokens AND the granted scope list — this overwrites whatever was there before
   const admin = createAdminClient();
+  const updateData: Record<string, string> = {
+    user_id:                         userId,
+    spotify_access_token_encrypted:  encrypt(access_token),
+    token_expires_at:                new Date(Date.now() + expires_in * 1000).toISOString(),
+    spotify_scopes:                  scope,
+    updated_at:                      new Date().toISOString(),
+  };
+
+  if (refresh_token) {
+    updateData.spotify_refresh_token_encrypted = encrypt(refresh_token);
+  }
+
   await admin.from("user_preferences").upsert(
-    {
-      user_id:                          userId,
-      spotify_access_token_encrypted:   encrypt(access_token),
-      spotify_refresh_token_encrypted:  encrypt(refresh_token),
-      token_expires_at:                 new Date(Date.now() + expires_in * 1000).toISOString(),
-      spotify_scopes:                   scope,
-      updated_at:                       new Date().toISOString(),
-    },
+    updateData,
     { onConflict: "user_id" }
   );
+
+  invalidateTokenCache(userId);
+  primeTokenCache(userId, access_token, Date.now() + expires_in * 1000);
 
   return NextResponse.redirect(`${origin}/settings?reconnect=success`);
 }
