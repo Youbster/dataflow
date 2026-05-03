@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Compass, GitCompare, Search, Sparkles, UserPlus, Users } from "lucide-react";
+import { Compass, GitCompare, Search, Sparkles, UserCheck, UserPlus, Users } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -31,6 +31,7 @@ interface SocialFriend {
   compatibilityScore: number;
   uniqueArtists: string[];
   uniqueGenres: string[];
+  isFollowingBack: boolean;
 }
 
 function GenreChips({ genres }: { genres: string[] }) {
@@ -95,10 +96,73 @@ function FriendMiniCard({
   );
 }
 
+function SocialPersonCard({
+  person,
+  showFollowBack,
+  onFollow,
+}: {
+  person: SocialFriend;
+  showFollowBack: boolean;
+  onFollow: (targetId: string) => void;
+}) {
+  const needsFollowBack = showFollowBack && !person.isFollowingBack;
+
+  return (
+    <Card className="hover:border-primary/30 transition-colors">
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <Avatar className="w-10 h-10">
+            <AvatarImage src={person.avatarUrl ?? undefined} />
+            <AvatarFallback>{person.displayName.charAt(0)}</AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium truncate">{person.displayName}</p>
+            <p className="text-xs text-muted-foreground">
+              {person.username ? `@${person.username}` : `${person.compatibilityScore}% match`}
+            </p>
+          </div>
+          {showFollowBack && person.isFollowingBack && (
+            <span className="flex items-center gap-1 text-[10px] font-medium text-primary">
+              <UserCheck className="w-3 h-3" />
+              Mutual
+            </span>
+          )}
+        </div>
+
+        <GenreChips genres={person.topGenres} />
+
+        <div className="grid grid-cols-2 gap-2">
+          <Link href={`/social/compare/${person.id}`}>
+            <Button size="sm" variant="outline" className="w-full gap-1.5 text-xs">
+              <GitCompare className="w-3.5 h-3.5" />
+              Compare
+            </Button>
+          </Link>
+          {needsFollowBack ? (
+            <Button size="sm" className="w-full gap-1.5 text-xs" onClick={() => onFollow(person.id)}>
+              <UserPlus className="w-3.5 h-3.5" />
+              Follow Back
+            </Button>
+          ) : (
+            <Link href={`/social/compare/${person.id}`}>
+              <Button size="sm" className="w-full gap-1.5 text-xs">
+                <Sparkles className="w-3.5 h-3.5" />
+                Use Taste
+              </Button>
+            </Link>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SocialPage() {
   const [following, setFollowing] = useState<SocialFriend[]>([]);
+  const [followers, setFollowers] = useState<SocialFriend[]>([]);
   const [closest, setClosest] = useState<SocialFriend | null>(null);
   const [mostDifferent, setMostDifferent] = useState<SocialFriend | null>(null);
+  const [activeTab, setActiveTab] = useState<"following" | "followers">("following");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SocialSearchProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,6 +180,7 @@ export default function SocialPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load social");
       setFollowing(data.following ?? []);
+      setFollowers(data.followers ?? []);
       setClosest(data.closest ?? null);
       setMostDifferent(data.mostDifferent ?? null);
     } catch (err) {
@@ -164,6 +229,11 @@ export default function SocialPage() {
       setSearchResults((results) =>
         results.map((result) =>
           result.id === targetId ? { ...result, isFollowing: true } : result
+        )
+      );
+      setFollowers((people) =>
+        people.map((person) =>
+          person.id === targetId ? { ...person, isFollowingBack: true } : person
         )
       );
       await loadSocial();
@@ -237,7 +307,9 @@ export default function SocialPage() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Taste Circle</h2>
-          <p className="text-xs text-muted-foreground">{following.length} following</p>
+          <p className="text-xs text-muted-foreground">
+            {following.length} following · {followers.length} followers
+          </p>
         </div>
         {loading ? (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -262,55 +334,59 @@ export default function SocialPage() {
         )}
       </div>
 
-      <div>
-        <h2 className="text-lg font-semibold mb-4">Following</h2>
+      <div className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg font-semibold">People</h2>
+          <div className="inline-flex w-full sm:w-auto rounded-lg border border-border bg-accent/30 p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab("following")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                activeTab === "following"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Following · {following.length}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("followers")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                activeTab === "followers"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Followers · {followers.length}
+            </button>
+          </div>
+        </div>
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-32 rounded-xl" />
             ))}
           </div>
-        ) : following.length === 0 ? (
+        ) : activeTab === "following" && following.length === 0 ? (
           <EmptyState
             title="No taste circle yet"
             description="Find friends by username or display name to compare taste and use their music to break your loop."
           />
+        ) : activeTab === "followers" && followers.length === 0 ? (
+          <EmptyState
+            title="No followers yet"
+            description="When people follow you, they'll appear here so you can compare taste or follow them back."
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {following.map((friend) => (
-              <Card key={friend.id} className="hover:border-primary/30 transition-colors">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="w-10 h-10">
-                      <AvatarImage src={friend.avatarUrl ?? undefined} />
-                      <AvatarFallback>{friend.displayName.charAt(0)}</AvatarFallback>
-                    </Avatar>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{friend.displayName}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {friend.username ? `@${friend.username}` : `${friend.compatibilityScore}% match`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <GenreChips genres={friend.topGenres} />
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Link href={`/social/compare/${friend.id}`}>
-                      <Button size="sm" variant="outline" className="w-full gap-1.5 text-xs">
-                        <GitCompare className="w-3.5 h-3.5" />
-                        Compare
-                      </Button>
-                    </Link>
-                    <Link href={`/social/compare/${friend.id}`}>
-                      <Button size="sm" className="w-full gap-1.5 text-xs">
-                        <Sparkles className="w-3.5 h-3.5" />
-                        Use Taste
-                      </Button>
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
+            {(activeTab === "following" ? following : followers).map((person) => (
+              <SocialPersonCard
+                key={person.id}
+                person={person}
+                showFollowBack={activeTab === "followers"}
+                onFollow={handleFollow}
+              />
             ))}
           </div>
         )}

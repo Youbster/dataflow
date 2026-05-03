@@ -24,6 +24,19 @@ interface FriendProfile {
   bio: string | null;
 }
 
+interface SocialFriend {
+  id: string;
+  displayName: string;
+  username: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+  topGenres: string[];
+  compatibilityScore: number;
+  uniqueArtists: string[];
+  uniqueGenres: string[];
+  isFollowingBack: boolean;
+}
+
 function norm(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -64,14 +77,24 @@ export async function GET() {
   }
 
   const admin = createAdminClient();
-  const { data: follows } = await admin
-    .from("user_followers")
-    .select("following_id")
-    .eq("follower_id", user.id);
+  const [{ data: follows }, { data: followerRows }] = await Promise.all([
+    admin
+      .from("user_followers")
+      .select("following_id")
+      .eq("follower_id", user.id),
+    admin
+      .from("user_followers")
+      .select("follower_id")
+      .eq("following_id", user.id),
+  ]);
 
-  const ids = [...new Set((follows ?? []).map((follow) => follow.following_id as string))];
+  const followingIds = [...new Set((follows ?? []).map((follow) => follow.following_id as string))];
+  const followerIds = [...new Set((followerRows ?? []).map((follow) => follow.follower_id as string))];
+  const ids = [...new Set([...followingIds, ...followerIds])];
+  const followingIdSet = new Set(followingIds);
+
   if (ids.length === 0) {
-    return NextResponse.json({ following: [], closest: null, mostDifferent: null });
+    return NextResponse.json({ following: [], followers: [], closest: null, mostDifferent: null });
   }
 
   const [{ data: profiles }, { data: myArtists }, { data: friendArtists }, { data: myTracks }, { data: friendTracks }] = await Promise.all([
@@ -119,8 +142,12 @@ export async function GET() {
   const friendRows = (friendArtists ?? []) as ArtistRow[];
   const friendTrackRows = (friendTracks ?? []) as TrackRow[];
 
-  const following = ((profiles ?? []) as FriendProfile[])
-    .map((profile) => {
+  const profileMap = new Map(((profiles ?? []) as FriendProfile[]).map((profile) => [profile.id, profile]));
+  const buildList = (profileIds: string[]): SocialFriend[] =>
+    profileIds
+      .map((id) => profileMap.get(id))
+      .filter((profile): profile is FriendProfile => profile !== undefined)
+      .map((profile) => {
       const artists = friendRows
         .filter((artist) => artist.user_id === profile.id)
         .sort((a, b) => a.rank - b.rank);
@@ -163,12 +190,17 @@ export async function GET() {
         compatibilityScore,
         uniqueArtists,
         uniqueGenres,
+        isFollowingBack: followingIdSet.has(profile.id),
       };
     })
     .sort((a, b) => b.compatibilityScore - a.compatibilityScore);
 
+  const following = buildList(followingIds);
+  const followers = buildList(followerIds);
+
   return NextResponse.json({
     following,
+    followers,
     closest: following[0] ?? null,
     mostDifferent: [...following].sort((a, b) => a.compatibilityScore - b.compatibilityScore)[0] ?? null,
   });
