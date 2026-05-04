@@ -5,7 +5,7 @@ import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
 import { primeTokenCache } from "@/lib/spotify/token";
-import { markEscapePoolRecommended, refreshEscapePool, selectEscapePoolTracks } from "@/lib/escape-pool";
+import { markEscapePoolRecommended, selectEscapePoolTracks } from "@/lib/escape-pool";
 import { SPOTIFY_API_BASE, SPOTIFY_TOKEN_URL } from "@/lib/constants";
 import type { SpotifyTrack, SpotifyArtist, SpotifySearchResult } from "@/types/spotify";
 
@@ -189,27 +189,19 @@ async function searchTracksForGeneration(
   query: string,
   limit: number,
 ): Promise<SpotifySearchResult> {
-  try {
-    return await spotify.searchTracks(query, limit);
-  } catch (userTokenErr) {
-    const token = await getSpotifyAppToken();
-    const response = await fetch(
-      `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+  const token = await getSpotifyAppToken();
+  const response = await fetch(
+    `${SPOTIFY_API_BASE}/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 
-    if (!response.ok) {
-      const message = await response.text();
-      console.warn("[mood-playlist] Spotify generation search failed", {
-        query,
-        userTokenError: userTokenErr instanceof Error ? userTokenErr.message : String(userTokenErr),
-        appTokenError: message,
-      });
-      throw new Error(`Spotify search failed: ${message}`);
-    }
-
-    return response.json();
+  if (!response.ok) {
+    const message = await response.text();
+    console.warn("[mood-playlist] Spotify generation search failed", { query, appTokenError: message });
+    throw new Error(`Spotify search failed: ${message}`);
   }
+
+  return response.json();
 }
 
 async function spotifyAppGet<T>(endpoint: string): Promise<T> {
@@ -1474,11 +1466,6 @@ export async function POST(request: NextRequest) {
         });
 
         if (combinedTracks.length >= counts.total) {
-          after(async () => {
-            await refreshEscapePool(user.id, spotify, admin).catch((err) => {
-              console.warn("[break-loop] Background Escape Pool refresh skipped:", err);
-            });
-          });
           const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used your Escape Pool plus a fresh top-up, with recent plays and top repeats blocked.`;
           return buildResponse(
             sequencePlaylist(combinedTracks.slice(0, counts.total), "build"),
@@ -1489,14 +1476,6 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        await withTimeout(
-          refreshEscapePool(user.id, spotify, admin).catch((err) => {
-            console.warn("[break-loop] Escape Pool refresh skipped:", err);
-            return { inserted: 0 };
-          }),
-          3_500,
-          { inserted: 0 },
-        );
         escapePoolTracks = await selectEscapePoolTracks(user.id, admin, {
           targetCount: counts.total,
           requestText: `${modeRequestStr} ${breakLoopTarget}`,
@@ -1522,13 +1501,6 @@ export async function POST(request: NextRequest) {
           cacheKey,
         );
       }
-
-      after(async () => {
-        await refreshEscapePool(user.id, spotify, admin).catch((err) => {
-          console.warn("[break-loop] Background Escape Pool refresh skipped:", err);
-        });
-      });
-
       if (bestBreakTracks.length >= counts.total) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used the best non-repeat matches available while your Escape Pool keeps filling in the background.`;
         return buildResponse(
@@ -1656,57 +1628,7 @@ export async function POST(request: NextRequest) {
           6,
           )
         : [];
-      const aiAskFor = Math.min(14, Math.max(counts.total, 10));
-      const resetPrompt = `You are building a Spotify playlist to break a user's repetitive listening loop.
-
-REQUEST: "${requestStr}"
-MODE: ${modeConfig.label}
-DIRECTION: ${modeConfig.aiDirection}
-${targetDirection}${intensityStr}
-
-LISTENER TASTE DNA:
-- Core genres: ${genreStr || "varied"}
-- Favorite artists to use only as reference, not suggestions: ${topArtists || "none"}
-- Hard-block these tracks completely: ${blockedTrackLabels.join("; ") || "none"}${constraintsStr}
-
-Suggest ${aiAskFor} real Spotify tracks that follow the MODE and DIRECTION, fit the user's taste, and stay outside the blocked list.
-
-Return ONLY valid JSON:
-{
-  "tracks": [
-    { "track": "Exact Spotify track title", "artist": "Exact Spotify artist name", "reason": "short reason" }
-  ]
-}`;
-
-      const aiResetPromise = withTimeout(
-        (async () => {
-          const aiReset = await getOpenAI().chat.completions.create({
-            model: FAST_MODEL,
-            max_tokens: 900,
-            messages: [
-              { role: "system", content: MUSIC_EXPERT_SYSTEM },
-              { role: "user", content: resetPrompt },
-            ],
-          });
-          const text = aiReset.choices[0].message.content ?? "";
-          const match = text.match(/\{[\s\S]*\}/)?.[0];
-          const suggestions = match
-            ? (JSON.parse(match) as { tracks?: { track: string; artist: string; reason?: string }[] }).tracks ?? []
-            : [];
-          const resolved = await Promise.allSettled(
-            suggestions.slice(0, 8).map((suggestion) => spotify.findTrack(suggestion.track, suggestion.artist))
-          );
-          return resolved
-            .filter((result): result is PromiseFulfilledResult<SpotifyTrack | null> => result.status === "fulfilled")
-            .map((result) => result.value)
-            .filter((track): track is SpotifyTrack => track !== null);
-        })().catch((err) => {
-          console.warn("[break-loop] AI reset fallback failed:", err);
-          return [] as SpotifyTrack[];
-        }),
-        4_000,
-        [] as SpotifyTrack[],
-      );
+      const aiResetPromise = Promise.resolve([] as SpotifyTrack[]);
 
       const searchBatch = async (queries: string[], limit: number) => {
         const results: Array<{ track: SpotifyTrack; query: string }> = [];
