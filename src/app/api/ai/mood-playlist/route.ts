@@ -1854,8 +1854,8 @@ Return ONLY valid JSON:
             intensity,
             targetCount: counts.total - finalTracks.length,
             recentSet,
-            knownArtistNorms,
-            avoidKnownArtists: breakLoopMode === "new_lane" || breakLoopMode === "surprise",
+            knownArtistNorms: new Set(),
+            avoidKnownArtists: false,
             blockedTrackIds,
             blockedTrackNorms,
           }).catch((err) => {
