@@ -925,6 +925,25 @@ async function buildSpotifyDiscoveryPlaylist({
     if (candidates.length >= targetCount * 4) break;
   }
 
+  if (candidates.length < Math.max(8, Math.ceil(targetCount * 1.5))) {
+    const discoveryQueries = uniqueStrings(
+      [
+        ...allGenres.slice(0, 3),
+        "fresh finds",
+      ].filter(Boolean),
+      3,
+    );
+    for (const query of discoveryQueries) {
+      const result = await withTimeout(
+        searchTracksForGeneration(spotify, query, 12).catch(() => null),
+        2_000,
+        null,
+      );
+      collect(result?.tracks?.items ?? [], `Spotify search — ${query}`);
+      if (candidates.length >= targetCount * 4) break;
+    }
+  }
+
   const picked: PlaylistTrack[] = [];
   const seenIds = new Set<string>();
   const artistCounts = new Map<string, number>();
