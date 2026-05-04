@@ -145,6 +145,33 @@ class SpotifyClient {
     }
   }
 
+  async getRecommendations(params: {
+    seedArtists?: string[];
+    seedTracks?: string[];
+    seedGenres?: string[];
+    limit?: number;
+    market?: string;
+  }): Promise<SpotifyTrack[]> {
+    const seedArtists = [...new Set((params.seedArtists ?? []).filter(Boolean))].slice(0, 5);
+    const seedTracks = [...new Set((params.seedTracks ?? []).filter(Boolean))].slice(0, 5);
+    const seedGenres = [...new Set((params.seedGenres ?? []).filter(Boolean))].slice(0, 5);
+    const query = new URLSearchParams();
+    if (seedArtists.length > 0) query.set("seed_artists", seedArtists.join(","));
+    if (seedTracks.length > 0) query.set("seed_tracks", seedTracks.join(","));
+    if (seedGenres.length > 0) query.set("seed_genres", seedGenres.join(","));
+    query.set("limit", String(Math.min(params.limit ?? 20, 100)));
+    if (params.market) query.set("market", params.market);
+
+    try {
+      const result = await this.request<{ tracks: SpotifyTrack[] }>(
+        `/recommendations?${query.toString()}`
+      );
+      return result.tracks ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Find a specific track by name + artist with artist validation.
    * Uses two strategies so special characters in artist names (e.g. &ME, A$AP)

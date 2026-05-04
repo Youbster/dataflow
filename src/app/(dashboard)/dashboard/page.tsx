@@ -53,7 +53,7 @@ const ACTIVITY_CHIPS = [
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Phase = "pick" | "loading" | "result";
 type Vibe  = "familiar" | "mixed" | "fresh";
-type GenerationGoal = "build_vibe" | "break_loop";
+type GenerationGoal = "build_vibe" | "break_loop" | "pure_discovery";
 type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
 
 const BREAK_LOOP_MODES: Array<{ value: BreakLoopMode; label: string; short: string }> = [
@@ -364,6 +364,15 @@ export default function DashboardPage() {
       discovery: false,
       loopMode: breakLoopMode,
       loopTarget: target,
+    });
+  }
+
+  async function pureDiscovery() {
+    await runPlaylistRequest({
+      goal: "pure_discovery",
+      prompt: promptText.trim() || "I'm bored of my songs, give me a new playlist I will love",
+      familiarity: "fresh",
+      discovery: true,
     });
   }
 
@@ -735,6 +744,16 @@ export default function DashboardPage() {
               {vibe === "fresh" ? "Discover music" : "Build this vibe"}
             </Button>
 
+            <Button
+              onClick={pureDiscovery}
+              disabled={false}
+              variant="secondary"
+              className="w-full h-10 text-sm font-semibold"
+            >
+              <Telescope className="w-4 h-4 mr-2" />
+              I&apos;m bored of my songs
+            </Button>
+
           </div>
         )}
 
@@ -749,14 +768,18 @@ export default function DashboardPage() {
                 {generationGoal === "break_loop"
                   ? "Breaking your loop…"
                   : generatedDiscovery
-                  ? "Hunting discoveries…"
+                  ? generationGoal === "pure_discovery"
+                    ? "Letting Spotify find you something new…"
+                    : "Hunting discoveries…"
                   : "Building your vibe…"}
               </p>
               <p className="text-sm text-muted-foreground mt-1 max-w-xs">
                 {generationGoal === "break_loop"
                   ? "Avoiding recent repeats, bringing back forgotten taste, and finding fresh edges"
                   : generatedDiscovery
-                  ? "Scanning your taste DNA for artists you've never heard"
+                  ? generationGoal === "pure_discovery"
+                    ? "Using Spotify recommendations, related artists, and search seeds to go wider without AI"
+                    : "Scanning your taste DNA for artists you've never heard"
                   : "Reading your taste, blocking overplayed songs, finding the right picks"}
               </p>
             </div>
@@ -779,7 +802,7 @@ export default function DashboardPage() {
                       )}
                       {generatedDiscovery && (
                         <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-violet-400 shrink-0">
-                          <Telescope className="w-3 h-3" /> Discovery
+                          <Telescope className="w-3 h-3" /> {generationGoal === "pure_discovery" ? "Spotify Discovery" : "Discovery"}
                         </span>
                       )}
                       {resultLabel && generationGoal !== "break_loop" && !generatedDiscovery && (

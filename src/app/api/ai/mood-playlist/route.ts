@@ -108,7 +108,7 @@ interface SpotifyAlbumTracksResponse {
   }>;
 }
 
-type GenerationGoal = "build_vibe" | "break_loop";
+type GenerationGoal = "build_vibe" | "break_loop" | "pure_discovery";
 type BreakLoopMode = "near_taste" | "new_lane" | "energy_shift" | "surprise";
 
 const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
@@ -837,6 +837,158 @@ async function buildFastSearchPlaylist({
   return picked.slice(0, targetCount);
 }
 
+async function buildSpotifyDiscoveryPlaylist({
+  spotify,
+  requestStr,
+  allGenres,
+  intensity,
+  targetCount,
+  recentSet,
+  knownArtistNorms,
+  shortArtists,
+  shortCandidates,
+  blockedTrackIds,
+  blockedTrackNorms,
+}: {
+  spotify: ReturnType<typeof createSpotifyClient>;
+  requestStr: string;
+  allGenres: string[];
+  intensity: "low" | "mid" | "high";
+  targetCount: number;
+  recentSet: Set<string>;
+  knownArtistNorms: Set<string>;
+  shortArtists: SpotifyArtist[];
+  shortCandidates: SpotifyTrack[];
+  blockedTrackIds: Set<string>;
+  blockedTrackNorms: Set<string>;
+}): Promise<PlaylistTrack[]> {
+  const candidates: Array<{ track: SpotifyTrack; source: string }> = [];
+  const collect = (tracks: SpotifyTrack[], source: string) => {
+    for (const track of tracks) candidates.push({ track, source });
+  };
+  const topArtistIds = uniqueStrings(shortArtists.slice(0, 5).map((artist) => artist.id), 5);
+  const relatedArtistBuckets = await Promise.allSettled(
+    topArtistIds.slice(0, 3).map((artistId) =>
+      withTimeout(
+        spotify.getRelatedArtists(artistId).then((artists) => ({ artistId, artists })),
+        2_000,
+        null,
+      )
+    )
+  );
+  const relatedArtistIds = uniqueStrings(
+    relatedArtistBuckets
+      .filter(
+        (result): result is PromiseFulfilledResult<{ artistId: string; artists: SpotifyArtist[] } | null> =>
+          result.status === "fulfilled",
+      )
+      .flatMap((result) => (result.value?.artists ?? []).slice(0, 4).map((artist) => artist.id)),
+    12,
+  );
+
+  const recommendationSeedGroups = [
+    {
+      seedArtists: topArtistIds.slice(0, 2),
+      seedTracks: shortCandidates.slice(0, 2).map((track) => track.id),
+      seedGenres: allGenres.slice(0, 1),
+    },
+    {
+      seedArtists: relatedArtistIds.slice(0, 2),
+      seedTracks: shortCandidates.slice(2, 4).map((track) => track.id),
+      seedGenres: allGenres.slice(1, 3),
+    },
+    {
+      seedArtists: relatedArtistIds.slice(2, 4),
+      seedTracks: shortCandidates.slice(4, 6).map((track) => track.id),
+      seedGenres: allGenres.slice(0, 3),
+    },
+  ].filter((group) => group.seedArtists.length > 0 || group.seedTracks.length > 0 || group.seedGenres.length > 0);
+
+  for (const group of recommendationSeedGroups) {
+    const recs = await withTimeout(
+      spotify.getRecommendations({
+        seedArtists: group.seedArtists,
+        seedTracks: group.seedTracks,
+        seedGenres: group.seedGenres,
+        limit: 20,
+        market: "US",
+      }),
+      2_500,
+      [] as SpotifyTrack[],
+    );
+    collect(recs, "Spotify recommendation");
+    if (candidates.length >= targetCount * 3) break;
+  }
+
+  const discoveryQueries = uniqueStrings(
+    [
+      requestStr,
+      ...allGenres.slice(0, 5),
+      intensity === "high" ? "upbeat fresh finds" : "",
+      intensity === "low" ? "chill fresh finds" : "",
+      "fresh finds",
+      "new music friday",
+      "underrated tracks",
+      "deep cuts",
+    ].filter(Boolean),
+    6,
+  );
+  for (const query of discoveryQueries) {
+    const result = await withTimeout(
+      searchTracksForGeneration(spotify, query, 18).catch(() => null),
+      2_000,
+      null,
+    );
+    collect(result?.tracks?.items ?? [], `Spotify search — ${query}`);
+    if (candidates.length >= targetCount * 4) break;
+  }
+
+  for (const artist of shortArtists.slice(0, 5)) {
+    const tracks = await withTimeout(
+      spotify.getArtistTopTracks(artist.id).catch(() => [] as SpotifyTrack[]),
+      2_000,
+      [] as SpotifyTrack[],
+    );
+    collect(tracks, `Spotify artist top tracks — ${artist.name}`);
+    if (candidates.length >= targetCount * 4) break;
+  }
+
+  const picked: PlaylistTrack[] = [];
+  const seenIds = new Set<string>();
+  const artistCounts = new Map<string, number>();
+  const addTrack = (track: SpotifyTrack, source: string, relaxKnownArtists: boolean) => {
+    if (picked.length >= targetCount || seenIds.has(track.id)) return;
+    const artistName = track.artists[0]?.name ?? "";
+    const artistNorm = normalizeForCompare(artistName);
+    if (!artistNorm) return;
+    if (recentSet.has(`${track.name}|||${artistName}`)) return;
+    if (blockedTrackIds.has(track.id)) return;
+    if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) return;
+    if (knownArtistNorms.has(artistNorm) && !relaxKnownArtists) return;
+    if ((artistCounts.get(artistNorm) ?? 0) >= 2) return;
+    const section =
+      picked.length < Math.max(1, Math.round(targetCount * 0.15))
+        ? "anchor"
+        : picked.length < Math.max(2, Math.round(targetCount * 0.65))
+        ? "groove"
+        : "discovery";
+    seenIds.add(track.id);
+    artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
+    picked.push(
+      section === "discovery"
+        ? resolveSpotifyDiscoveryTrack(track, source)
+        : resolveSpotifyTrack(track, section, source),
+    );
+  };
+
+  for (const item of candidates) addTrack(item.track, item.source, false);
+  if (picked.length < Math.ceil(targetCount * 0.6)) {
+    for (const item of candidates) addTrack(item.track, item.source, true);
+  }
+
+  return sequencePlaylist(picked.slice(0, targetCount), "build");
+}
+
 /** Maps a SpotifyTrack directly to a PlaylistTrack — no extra API calls needed. */
 function resolveSpotifyTrack(
   t: SpotifyTrack,
@@ -972,7 +1124,12 @@ export async function POST(request: NextRequest) {
   const sessionMinutes: number                     = body.sessionMinutes ?? 60;
   const familiarity: "familiar" | "mixed" | "fresh" = body.familiarity ?? "mixed";
   const intensity:   "low" | "mid" | "high"        = body.intensity   ?? "mid";
-  const generationGoal: GenerationGoal = body.goal === "break_loop" ? "break_loop" : "build_vibe";
+  const generationGoal: GenerationGoal =
+    body.goal === "break_loop"
+      ? "break_loop"
+      : body.goal === "pure_discovery"
+      ? "pure_discovery"
+      : "build_vibe";
   const breakLoopMode: BreakLoopMode =
     body.breakLoopMode === "new_lane" ||
     body.breakLoopMode === "energy_shift" ||
@@ -987,7 +1144,7 @@ export async function POST(request: NextRequest) {
   const genreLock:   string | null = body.genreLock  ?? null;
   const artistLock:  string | null = body.artistLock ?? null;
 
-  if (!userPrompt.trim() && familiarity !== "fresh" && generationGoal !== "break_loop") {
+  if (!userPrompt.trim() && familiarity !== "fresh" && generationGoal !== "break_loop" && generationGoal !== "pure_discovery") {
     return NextResponse.json({ error: "Provide a description or pick a mood" }, { status: 400 });
   }
 
@@ -1143,7 +1300,11 @@ export async function POST(request: NextRequest) {
       : "";
 
     const requestStr = userPrompt.trim()
-      || (generationGoal === "break_loop" ? "Break my Spotify loop" : "Discover great music matching my taste");
+      || (generationGoal === "break_loop"
+        ? "Break my Spotify loop"
+        : generationGoal === "pure_discovery"
+        ? "I'm bored of my songs, give me a new playlist I will love"
+        : "Discover great music matching my taste");
     const hasData    = shortCandidates.length > 0 || longCandidates.length > 0;
     const fallbackIntent = buildFallbackIntent(requestStr, familiarity, intensity, genreLock, artistLock);
     const knownArtistNorms = new Set(
@@ -1173,6 +1334,37 @@ export async function POST(request: NextRequest) {
     }
 
     if (generationGoal !== "break_loop") {
+      if (generationGoal === "pure_discovery") {
+        const tracks = await buildSpotifyDiscoveryPlaylist({
+          spotify,
+          requestStr: `${requestStr} ${genreLock ?? ""} ${allGenres.slice(0, 4).join(" ")}`.trim(),
+          allGenres,
+          intensity,
+          targetCount: counts.total,
+          recentSet,
+          knownArtistNorms,
+          shortArtists,
+          shortCandidates,
+          blockedTrackIds,
+          blockedTrackNorms,
+        });
+
+        if (tracks.length === 0) {
+          return NextResponse.json(
+            { error: "Spotify did not return enough discovery tracks for this request. Try a clearer genre or a shorter search phrase." },
+            { status: 422 },
+          );
+        }
+
+        return buildResponse(
+          tracks,
+          `Spotify-only discovery for "${requestStr}" using related artists, recommendations, and search seeds.`,
+          requestStr,
+          user.id,
+          cacheKey,
+        );
+      }
+
       // Fresh mode should avoid "already know well" artists AND avoid top-track repeats.
       if (familiarity === "fresh") {
         for (const row of [...shortTrackRows, ...longTrackRows]) {
