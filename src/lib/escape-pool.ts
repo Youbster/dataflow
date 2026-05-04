@@ -29,7 +29,7 @@ export interface EscapePoolRow {
 export interface EscapePoolSelectionContext {
   targetCount: number;
   requestText: string;
-  mode: "break_loop" | "build_vibe" | "friend_taste";
+  mode: "break_loop" | "build_vibe" | "fresh" | "friend_taste";
   breakLoopMode?: "near_taste" | "new_lane" | "energy_shift" | "surprise";
   intensity: "low" | "mid" | "high";
   genreHints: string[];
@@ -367,6 +367,17 @@ export async function selectEscapePoolTracks(
       );
       let score = numericScore(row.affinity_score) + numericScore(row.novelty_score);
       if (context.mode === "break_loop") score += 30;
+      if (context.mode === "fresh") {
+        // Fresh discovery means "new to me" first: heavily down-rank known artists and
+        // reuse, while preferring novelty-oriented sources.
+        if (context.knownArtistNorms?.has(artistNorm)) score -= 120;
+        score += numericScore(row.novelty_score) * 1.4;
+        if (row.source === "genre_fresh") score += 28;
+        if (row.source === "artist_radio") score += 14;
+        if (row.source === "top_track") score -= 60;
+        // Avoid the ultra-popular defaults in discovery mode.
+        score -= Math.max(0, (row.popularity ?? 50) - 78);
+      }
       if (context.breakLoopMode === "near_taste") {
         score += row.source === "top_track" ? -45 : 0;
         if (["artist_radio", "artist_deep_cut", "artist_top_track"].includes(row.source)) score += 18;

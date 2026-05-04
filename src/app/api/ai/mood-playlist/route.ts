@@ -969,6 +969,7 @@ export async function POST(request: NextRequest) {
   }
 
   const counts  = trackCount(sessionMinutes);
+  // Create the client once; individual branches decide whether to call Spotify.
   const spotify = createSpotifyClient(user.id);
   const cacheKey = buildCacheKey(user.id, {
     prompt: userPrompt,
@@ -1126,35 +1127,88 @@ export async function POST(request: NextRequest) {
       topArtists.toLowerCase().split(", ").filter(Boolean).map((s) => normalizeForCompare(s.trim()))
     );
 
-    if (!hasData) {
-      const targetCount = counts.total;
-      const starterTracks = await buildFastSearchPlaylist({
-        spotify,
-        requestStr: breakLoopTarget || genreLock || requestStr,
-        allGenres,
-        intent: fallbackIntent,
-        intensity,
-        targetCount,
-        recentSet,
-        knownArtistNorms,
-        avoidKnownArtists: false,
-      });
+    // ── Fast-path on Vercel Hobby: Escape Pool only ──────────────────────────
+    //
+    // On free Vercel, long-running Spotify/OpenAI work frequently hits
+    // FUNCTION_INVOCATION_TIMEOUT (504). The Escape Pool is refreshed during
+    // /api/spotify/sync and gives us a high-quality cached candidate set.
+    //
+    // We use it for:
+    // - build_vibe (familiar/mixed): accurate, taste-aligned, avoids recent repeats
+    // - fresh: discovery-first (strongly filters known artists)
+    //
+    // break_loop already prefers Escape Pool, but may still do top-ups; keep that
+    // logic below for now.
+    const blockedTrackIds = new Set<string>();
+    const blockedTrackNorms = new Set<string>();
+    for (const item of recentlyPlayedRows ?? []) {
+      const id = (item.spotify_track_id as string | null) ?? "";
+      if (id) blockedTrackIds.add(id);
+      const artistName = ((item.artist_names as string[] | null)?.[0]) ?? "";
+      const trackName = (item.track_name as string | null) ?? "";
+      if (trackName || artistName) blockedTrackNorms.add(trackIdentity(trackName ?? "", artistName ?? ""));
+    }
 
-      if (starterTracks.length === 0) {
+    if (generationGoal !== "break_loop") {
+      // Fresh mode should avoid "already know well" artists AND avoid top-track repeats.
+      if (familiarity === "fresh") {
+        for (const row of [...shortTrackRows, ...longTrackRows]) {
+          if (row.spotify_track_id) blockedTrackIds.add(row.spotify_track_id);
+          const artistName = (row.artist_names?.[0]) ?? "";
+          if (row.track_name || artistName) blockedTrackNorms.add(trackIdentity(row.track_name ?? "", artistName ?? ""));
+        }
+      }
+
+      const escapeMode = familiarity === "fresh" ? "fresh" : "build_vibe";
+      const escapeTracks = await withTimeout(
+        selectEscapePoolTracks(user.id, admin, {
+          targetCount: counts.total,
+          requestText: requestStr,
+          mode: escapeMode,
+          intensity,
+          genreHints: [
+            genreLock ?? "",
+            artistLock ?? "",
+            ...allGenres,
+            ...(familiarity === "fresh" ? ["fresh", "new", "underrated", "deep cuts"] : []),
+          ],
+          blockedTrackIds,
+          blockedTrackNorms,
+          knownArtistNorms,
+        }).catch(() => []),
+        1_800,
+        [],
+      );
+
+      // If the pool is thin (new user or hasn't synced recently), fail fast with a clear message
+      // rather than timing out on slow Spotify search/LLM fallbacks.
+      const minOk = Math.min(counts.total, familiarity === "fresh" ? 8 : 10);
+      if (escapeTracks.length < Math.min(3, minOk)) {
         return NextResponse.json(
-          { error: "Spotify did not return enough tracks yet. Try adding a genre or mood like 'afro house workout'." },
-          { status: 422 },
+          { error: "Not enough cached tracks yet. Tap Sync, then try again in ~15 seconds." },
+          { status: 503 },
         );
       }
 
-      const starterLabel = generationGoal === "break_loop" ? "starter loop reset" : "starter playlist";
-      const intro = `Built a ${starterLabel} from your request while your Spotify taste profile warms up. Sync more listening history and the next one will get more personal.`;
+      const intro =
+        familiarity === "fresh"
+          ? `Fresh picks for "${requestStr}" — pulled from your Escape Pool while blocking recent and known-artist repeats.`
+          : `Built for "${requestStr}" from your Escape Pool — taste-aligned tracks while avoiding your recent repeats.`;
       return buildResponse(
-        sequencePlaylist(starterTracks, fallbackIntent.flow),
+        sequencePlaylist(escapeTracks.slice(0, counts.total), familiarity === "fresh" ? "build" : fallbackIntent.flow),
         intro,
         requestStr,
         user.id,
         cacheKey,
+      );
+    }
+
+    if (!hasData) {
+      // Keep a fast failure on free-tier rather than running slow Spotify search
+      // while the taste profile is empty.
+      return NextResponse.json(
+        { error: "Sync your Spotify first (Dashboard → Sync). Generation uses cached taste data on free tier." },
+        { status: 503 },
       );
     }
 
@@ -1166,6 +1220,7 @@ export async function POST(request: NextRequest) {
     // Spotify search against the user's taste DNA while hard-blocking recent
     // history plus short-term and long-term top tracks.
     if (generationGoal === "break_loop") {
+      const spotify = createSpotifyClient(user.id);
       const modeConfig = {
         near_taste: {
           label: "Near Taste",
