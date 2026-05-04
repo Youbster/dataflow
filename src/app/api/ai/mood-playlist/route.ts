@@ -4,7 +4,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getOpenAI, FAST_MODEL } from "@/lib/claude/client";
 import { MUSIC_EXPERT_SYSTEM } from "@/lib/claude/prompts";
 import { createSpotifyClient } from "@/lib/spotify/client";
-import { primeTokenCache } from "@/lib/spotify/token";
 import { markEscapePoolRecommended, selectEscapePoolTracks } from "@/lib/escape-pool";
 import { SPOTIFY_API_BASE, SPOTIFY_TOKEN_URL } from "@/lib/constants";
 import type { SpotifyTrack, SpotifyArtist, SpotifySearchResult } from "@/types/spotify";
@@ -839,9 +838,7 @@ async function buildFastSearchPlaylist({
 
 async function buildSpotifyDiscoveryPlaylist({
   spotify,
-  requestStr,
   allGenres,
-  intensity,
   targetCount,
   recentSet,
   knownArtistNorms,
@@ -851,9 +848,7 @@ async function buildSpotifyDiscoveryPlaylist({
   blockedTrackNorms,
 }: {
   spotify: ReturnType<typeof createSpotifyClient>;
-  requestStr: string;
   allGenres: string[];
-  intensity: "low" | "mid" | "high";
   targetCount: number;
   recentSet: Set<string>;
   knownArtistNorms: Set<string>;
@@ -918,29 +913,6 @@ async function buildSpotifyDiscoveryPlaylist({
     );
     collect(recs, "Spotify recommendation");
     if (candidates.length >= targetCount * 3) break;
-  }
-
-  const discoveryQueries = uniqueStrings(
-    [
-      requestStr,
-      ...allGenres.slice(0, 5),
-      intensity === "high" ? "upbeat fresh finds" : "",
-      intensity === "low" ? "chill fresh finds" : "",
-      "fresh finds",
-      "new music friday",
-      "underrated tracks",
-      "deep cuts",
-    ].filter(Boolean),
-    6,
-  );
-  for (const query of discoveryQueries) {
-    const result = await withTimeout(
-      searchTracksForGeneration(spotify, query, 18).catch(() => null),
-      2_000,
-      null,
-    );
-    collect(result?.tracks?.items ?? [], `Spotify search — ${query}`);
-    if (candidates.length >= targetCount * 4) break;
   }
 
   for (const artist of shortArtists.slice(0, 5)) {
@@ -1099,25 +1071,9 @@ async function resolveDiscoveryTracks(
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  // getSession() decodes the JWT from the cookie locally — zero HTTP round-trips.
-  // (getUser() would make an HTTP call to Supabase auth server every request.)
   const supabase = await createClient();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const user = session.user;
-
-  // Supabase stores the Spotify access token in the session cookie right after
-  // OAuth (session.provider_token). If it's still there, seed the in-process
-  // token cache so the first Spotify API call skips the Supabase DB query
-  // entirely. After ~1 hour the session refreshes without a new provider_token,
-  // so this is a best-effort optimisation — the DB fallback handles the rest.
-  // If the token turns out to be expired, SpotifyClient.request() detects the
-  // 401 from Spotify, evicts the cache entry, and retries via DB automatically.
-  if (session.provider_token) {
-    // Spotify tokens last 1 hour. We don't know exactly when this one was
-    // issued, so assume 30 minutes remaining — conservative but safe.
-    primeTokenCache(user.id, session.provider_token, Date.now() + 30 * 60 * 1000);
-  }
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json().catch(() => ({}));
   const userPrompt: string    = body.prompt        ?? "";
@@ -1337,9 +1293,7 @@ export async function POST(request: NextRequest) {
       if (generationGoal === "pure_discovery") {
         const tracks = await buildSpotifyDiscoveryPlaylist({
           spotify,
-          requestStr: `${requestStr} ${genreLock ?? ""} ${allGenres.slice(0, 4).join(" ")}`.trim(),
           allGenres,
-          intensity,
           targetCount: counts.total,
           recentSet,
           knownArtistNorms,
