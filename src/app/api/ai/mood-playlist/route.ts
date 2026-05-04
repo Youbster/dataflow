@@ -115,6 +115,7 @@ const PLAYLIST_CACHE = new Map<string, CachedPlaylist>();
 const PLAYLIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const PLAYLIST_CACHE_MAX_ENTRIES = 80;
 let SPOTIFY_APP_TOKEN: { token: string; expiresAt: number } | null = null;
+let SPOTIFY_APP_TOKEN_PROMISE: Promise<string> | null = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -154,26 +155,33 @@ async function getSpotifyAppToken(): Promise<string> {
   if (SPOTIFY_APP_TOKEN && SPOTIFY_APP_TOKEN.expiresAt > Date.now() + 60_000) {
     return SPOTIFY_APP_TOKEN.token;
   }
+  if (SPOTIFY_APP_TOKEN_PROMISE) return SPOTIFY_APP_TOKEN_PROMISE;
 
-  const response = await fetch(SPOTIFY_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64")}`,
-    },
-    body: new URLSearchParams({ grant_type: "client_credentials" }),
+  SPOTIFY_APP_TOKEN_PROMISE = (async () => {
+    const response = await fetch(SPOTIFY_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64")}`,
+      },
+      body: new URLSearchParams({ grant_type: "client_credentials" }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Spotify app token failed: ${await response.text()}`);
+    }
+
+    const tokenResponse = (await response.json()) as { access_token: string; expires_in: number };
+    SPOTIFY_APP_TOKEN = {
+      token: tokenResponse.access_token,
+      expiresAt: Date.now() + tokenResponse.expires_in * 1000,
+    };
+    return tokenResponse.access_token;
+  })().finally(() => {
+    SPOTIFY_APP_TOKEN_PROMISE = null;
   });
 
-  if (!response.ok) {
-    throw new Error(`Spotify app token failed: ${await response.text()}`);
-  }
-
-  const tokenResponse = (await response.json()) as { access_token: string; expires_in: number };
-  SPOTIFY_APP_TOKEN = {
-    token: tokenResponse.access_token,
-    expiresAt: Date.now() + tokenResponse.expires_in * 1000,
-  };
-  return tokenResponse.access_token;
+  return SPOTIFY_APP_TOKEN_PROMISE;
 }
 
 async function searchTracksForGeneration(
@@ -780,18 +788,8 @@ async function buildFastSearchPlaylist({
       "electronic",
       "alternative",
     ],
-    10,
+    7,
   );
-  const searchResults = await withTimeout(
-    Promise.allSettled(
-      queries.map((query) =>
-        searchTracksForGeneration(spotify, query, 30).then((result) => ({ query, result }))
-      )
-    ),
-    9_000,
-    [],
-  );
-
   const picked: PlaylistTrack[] = [];
   const seenIds = new Set<string>();
   const artistCounts = new Map<string, number>();
@@ -826,9 +824,18 @@ async function buildFastSearchPlaylist({
     );
   };
 
-  const rows = searchResults
-    .filter((item): item is PromiseFulfilledResult<{ query: string; result: SpotifySearchResult }> => item.status === "fulfilled")
-    .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
+  const rows: Array<{ track: SpotifyTrack; query: string }> = [];
+  for (const query of queries) {
+    const result = await withTimeout(
+      searchTracksForGeneration(spotify, query, 20).catch(() => null),
+      2_000,
+      null,
+    );
+    for (const track of result?.tracks?.items ?? []) {
+      rows.push({ track, query });
+    }
+    if (rows.length >= targetCount * 4) break;
+  }
 
   for (const { track, query } of rows) addTrack(track, query, false);
   if (picked.length < Math.ceil(targetCount * 0.5)) {
@@ -1637,16 +1644,16 @@ export async function POST(request: NextRequest) {
       const strictQueries = [...tasteQueries, ...breakerQueries]
         .map((q) => q.trim())
         .filter((q, index, arr) => q.length > 0 && arr.indexOf(q) === index)
-        .slice(0, 8);
+        .slice(0, 5);
       const nearTasteArtistQueries = breakLoopMode === "near_taste"
         ? uniqueStrings(
             shortArtists.slice(0, 8).flatMap((artist) => [
               `${artist.name} deep cuts`,
               `${artist.name} radio`,
-              `${artist.name} remix`,
-              `${artist.name} underrated`,
-            ]),
-            12,
+            `${artist.name} remix`,
+            `${artist.name} underrated`,
+          ]),
+          6,
           )
         : [];
       const aiAskFor = Math.min(14, Math.max(counts.total, 10));
@@ -1702,19 +1709,19 @@ Return ONLY valid JSON:
       );
 
       const searchBatch = async (queries: string[], limit: number) => {
-        const results = await withTimeout(
-          Promise.allSettled(
-            queries.map((query) =>
-              searchTracksForGeneration(spotify, query, limit).then((result) => ({ query, result }))
-            )
-          ),
-          4_500,
-          [],
-        );
-
-        return results
-          .filter((item): item is PromiseFulfilledResult<{ query: string; result: SpotifySearchResult }> => item.status === "fulfilled")
-          .flatMap(({ value }) => (value.result.tracks?.items ?? []).map((track) => ({ track, query: value.query })));
+        const results: Array<{ track: SpotifyTrack; query: string }> = [];
+        for (const query of queries) {
+          const result = await withTimeout(
+            searchTracksForGeneration(spotify, query, limit).catch(() => null),
+            2_000,
+            null,
+          );
+          for (const track of result?.tracks?.items ?? []) {
+            results.push({ track, query });
+          }
+          if (results.length >= limit * 4) break;
+        }
+        return results;
       };
 
       const strictResults = await searchBatch(strictQueries, 25);
@@ -1768,7 +1775,7 @@ Return ONLY valid JSON:
       }
 
       if (resetCandidates.length === 0) {
-        const broadResults = await searchBatch(["fresh finds", "indie pop", "dance hits", "electronic hits"], 25);
+          const broadResults = await searchBatch(["fresh finds", "indie pop", "dance hits"], 20);
         for (const { track, query } of broadResults) {
           if (resetCandidates.length >= counts.total) break;
           addResetTrack(track, query, false);
@@ -1892,17 +1899,18 @@ Return ONLY valid JSON:
             "afro house",
             "house",
           ].filter(Boolean),
-          8,
+          6,
         );
-        const broadSearchResults = await withTimeout(
-          Promise.allSettled(
-            broadQueries.map((query) =>
-              searchTracksForGeneration(spotify, query, 25).then((result) => ({ query, result }))
-            )
-          ),
-          7_000,
-          [],
-        );
+        const broadSearchResults: Array<{ query: string; result: SpotifySearchResult }> = [];
+        for (const query of broadQueries) {
+          const result = await withTimeout(
+            searchTracksForGeneration(spotify, query, 20).catch(() => null),
+            2_000,
+            null,
+          );
+          if (!result) continue;
+          broadSearchResults.push({ query, result });
+        }
 
         const seenIds = new Set(finalTracks.map((track) => track.spotifyTrackId).filter(Boolean));
         const artistCounts = new Map<string, number>();
@@ -1913,8 +1921,7 @@ Return ONLY valid JSON:
         const broadArtistCap = breakLoopMode === "near_taste" ? 5 : 4;
 
         for (const item of broadSearchResults) {
-          if (item.status !== "fulfilled") continue;
-          for (const track of item.value.result.tracks?.items ?? []) {
+          for (const track of item.result.tracks?.items ?? []) {
             if (finalTracks.length >= counts.total) break;
             const artistName = track.artists[0]?.name ?? "";
             const artistNorm = normalizeForCompare(artistName);
@@ -1933,13 +1940,13 @@ Return ONLY valid JSON:
                 : "discovery";
             finalTracks.push(
               section === "discovery"
-                ? resolveSpotifyDiscoveryTrack(track, `Broad search fallback — "${item.value.query}"`)
+                ? resolveSpotifyDiscoveryTrack(track, `Broad search fallback — "${item.query}"`)
                 : resolveSpotifyTrack(
                     track,
                     section,
                     section === "anchor"
-                      ? `Broad search anchor — "${item.value.query}"`
-                      : `Broad search bridge — "${item.value.query}"`,
+                      ? `Broad search anchor — "${item.query}"`
+                      : `Broad search bridge — "${item.query}"`,
                   )
             );
           }
