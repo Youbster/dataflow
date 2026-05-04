@@ -134,6 +134,17 @@ class SpotifyClient {
     return tracks;
   }
 
+  async getRelatedArtists(artistId: string): Promise<SpotifyArtist[]> {
+    try {
+      const result = await this.request<{ artists: SpotifyArtist[] }>(
+        `/artists/${artistId}/related-artists`
+      );
+      return result.artists ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Find a specific track by name + artist with artist validation.
    * Uses two strategies so special characters in artist names (e.g. &ME, A$AP)

@@ -1947,6 +1947,12 @@ Return ONLY valid JSON:
         finalTracks = sequencePlaylist(finalTracks.slice(0, counts.total), "build");
       }
 
+      console.info("[break-loop] final playlist fill", {
+        ranked: rankedResetRows.length,
+        afterBroadFill: finalTracks.length,
+        target: counts.total,
+      });
+
       if (finalTracks.length === 0) {
         return NextResponse.json(
           {

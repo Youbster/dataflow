@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import type { createSpotifyClient } from "@/lib/spotify/client";
-import type { SpotifyTrack } from "@/types/spotify";
+import type { SpotifyArtist, SpotifyTrack } from "@/types/spotify";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 type SpotifyClient = ReturnType<typeof createSpotifyClient>;
@@ -263,9 +263,38 @@ export async function refreshEscapePool(
     ((topArtists ?? []) as TopArtistSeed[]),
     ((topTracks ?? []) as TopTrackSeed[]),
   ).slice(0, 10);
-  const genres = [...new Set(artists.flatMap((artist) => artist.genres ?? []))].slice(0, 10);
+  const relatedArtistResults = await Promise.allSettled(
+    artists.slice(0, 6).map((artist) =>
+      withTimeout(
+        spotify.getRelatedArtists(artist.spotify_artist_id).then((relatedArtists) => ({
+          artist,
+          relatedArtists,
+        })),
+        2_500,
+        null,
+      )
+    )
+  );
+  const relatedArtists = relatedArtistResults
+    .filter(
+        (result): result is PromiseFulfilledResult<{ artist: TopArtistSeed; relatedArtists: SpotifyArtist[] } | null> =>
+        result.status === "fulfilled",
+    )
+    .flatMap((result) => {
+      const value = result.value;
+      if (value === null) return [];
+      return (value.relatedArtists ?? []).slice(0, 4).map((artist, index) => ({
+        spotify_artist_id: artist.id,
+        artist_name: artist.name,
+        genres: artist.genres ?? value.artist.genres ?? [],
+        rank: (value.artist.rank ?? 999) + 0.25 + index * 0.05,
+        time_range: value.artist.time_range ?? "related_artist",
+      }));
+    });
+  const allArtistSeeds = deriveArtistSeeds([...artists, ...relatedArtists], topTracks as TopTrackSeed[]).slice(0, 16);
+  const genres = [...new Set(allArtistSeeds.flatMap((artist) => artist.genres ?? []))].slice(0, 10);
   const artistTopTrackResults = await Promise.allSettled(
-    artists.slice(0, 8).map((artist) =>
+    allArtistSeeds.slice(0, 10).map((artist) =>
       withTimeout(
         spotify.getArtistTopTracks(artist.spotify_artist_id).then((tracks) => ({ artist, tracks })),
         2_800,
@@ -295,7 +324,7 @@ export async function refreshEscapePool(
   }
 
   const searchQueries = [
-    ...artists.slice(0, 4).flatMap((artist) => [
+    ...allArtistSeeds.slice(0, 5).flatMap((artist) => [
       `${artist.artist_name} radio`,
       `${artist.artist_name} deep cuts`,
     ]),
