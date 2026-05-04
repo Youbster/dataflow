@@ -1910,6 +1910,7 @@ Return ONLY valid JSON:
           const artistNorm = normalizeForCompare(track.artistName);
           artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
         }
+        const broadArtistCap = breakLoopMode === "near_taste" ? 5 : 4;
 
         for (const item of broadSearchResults) {
           if (item.status !== "fulfilled") continue;
@@ -1920,7 +1921,7 @@ Return ONLY valid JSON:
             if (!artistNorm) continue;
             if (blockedTrackIds.has(track.id)) continue;
             if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) continue;
-            if ((artistCounts.get(artistNorm) ?? 0) >= (breakLoopMode === "near_taste" ? 3 : 2)) continue;
+            if ((artistCounts.get(artistNorm) ?? 0) >= broadArtistCap) continue;
             if (seenIds.has(track.id)) continue;
             seenIds.add(track.id);
             artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
