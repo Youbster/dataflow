@@ -1877,6 +1877,75 @@ Return ONLY valid JSON:
         finalTracks = sequencePlaylist(filledTracks.slice(0, counts.total), "build");
       }
 
+      if (finalTracks.length < counts.total) {
+        const broadQueries = uniqueStrings(
+          [
+            breakLoopTarget,
+            genreLock ?? "",
+            allGenres[0] ?? "",
+            ...modeConfig.queryBoosts,
+            "fresh finds",
+            "indie dance",
+            "electronic",
+            "alternative",
+            "dance hits",
+            "afro house",
+            "house",
+          ].filter(Boolean),
+          8,
+        );
+        const broadSearchResults = await withTimeout(
+          Promise.allSettled(
+            broadQueries.map((query) =>
+              searchTracksForGeneration(spotify, query, 25).then((result) => ({ query, result }))
+            )
+          ),
+          7_000,
+          [],
+        );
+
+        const seenIds = new Set(finalTracks.map((track) => track.spotifyTrackId).filter(Boolean));
+        const artistCounts = new Map<string, number>();
+        for (const track of finalTracks) {
+          const artistNorm = normalizeForCompare(track.artistName);
+          artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
+        }
+
+        for (const item of broadSearchResults) {
+          if (item.status !== "fulfilled") continue;
+          for (const track of item.value.result.tracks?.items ?? []) {
+            if (finalTracks.length >= counts.total) break;
+            const artistName = track.artists[0]?.name ?? "";
+            const artistNorm = normalizeForCompare(artistName);
+            if (!artistNorm) continue;
+            if (blockedTrackIds.has(track.id)) continue;
+            if (blockedTrackNorms.has(trackIdentity(track.name, artistName))) continue;
+            if ((artistCounts.get(artistNorm) ?? 0) >= (breakLoopMode === "near_taste" ? 3 : 2)) continue;
+            if (seenIds.has(track.id)) continue;
+            seenIds.add(track.id);
+            artistCounts.set(artistNorm, (artistCounts.get(artistNorm) ?? 0) + 1);
+            const section =
+              finalTracks.length < Math.max(1, Math.round(counts.total * 0.25))
+                ? "anchor"
+                : finalTracks.length < Math.max(2, Math.round(counts.total * 0.7))
+                ? "groove"
+                : "discovery";
+            finalTracks.push(
+              section === "discovery"
+                ? resolveSpotifyDiscoveryTrack(track, `Broad search fallback — "${item.value.query}"`)
+                : resolveSpotifyTrack(
+                    track,
+                    section,
+                    section === "anchor"
+                      ? `Broad search anchor — "${item.value.query}"`
+                      : `Broad search bridge — "${item.value.query}"`,
+                  )
+            );
+          }
+        }
+        finalTracks = sequencePlaylist(finalTracks.slice(0, counts.total), "build");
+      }
+
       if (finalTracks.length === 0) {
         return NextResponse.json(
           {
