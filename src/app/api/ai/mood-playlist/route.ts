@@ -1247,24 +1247,24 @@ export async function POST(request: NextRequest) {
       const modeConfig = {
         near_taste: {
           label: "Near Taste",
-          comfortPct: 0.35,
-          bridgePct: 0.25,
+          comfortPct: 0.15,
+          bridgePct: 0.35,
           strictBlocksKnownArtists: false,
           aiDirection: "Stay close to their taste and genres, but use different tracks and mostly adjacent artists.",
           queryBoosts: ["deep cuts", "underrated", "radio", "mix"],
         },
         new_lane: {
           label: "New Lane",
-          comfortPct: 0.2,
-          bridgePct: 0.25,
+          comfortPct: 0.1,
+          bridgePct: 0.35,
           strictBlocksKnownArtists: true,
           aiDirection: "Move one genre lane away from their current taste while keeping the same emotional feel.",
           queryBoosts: ["adjacent genre", "new wave", "underground", "crossover"],
         },
         energy_shift: {
           label: "Energy Switch",
-          comfortPct: 0.2,
-          bridgePct: 0.2,
+          comfortPct: 0.1,
+          bridgePct: 0.3,
           strictBlocksKnownArtists: false,
           aiDirection: intensity === "low"
             ? "Switch the energy downward: calmer, smoother, less intense than their usual loop."
@@ -1277,8 +1277,8 @@ export async function POST(request: NextRequest) {
         },
         surprise: {
           label: "Surprise",
-          comfortPct: 0.1,
-          bridgePct: 0.15,
+          comfortPct: 0.05,
+          bridgePct: 0.25,
           strictBlocksKnownArtists: true,
           aiDirection: "Take a bigger but still tasteful jump. Prioritize novelty and discovery over familiarity.",
           queryBoosts: ["fresh finds", "left field", "global", "indie"],
@@ -1563,7 +1563,7 @@ export async function POST(request: NextRequest) {
       const resetCandidates: ResetCandidate[] = [];
       const existingIds = new Set<string>();
       const artistPickCounts = new Map<string, number>();
-      const maxPicksPerArtist = breakLoopMode === "near_taste" ? 3 : 2;
+      const maxPicksPerArtist = 2;
       const addResetTrack = (track: SpotifyTrack, query: string, strict: boolean) => {
         const artistName = track.artists[0]?.name ?? "";
         const artistNorm = normalizeForCompare(artistName);
