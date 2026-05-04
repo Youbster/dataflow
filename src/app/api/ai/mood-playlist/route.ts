@@ -867,6 +867,30 @@ function resolveSpotifyDiscoveryTrack(t: SpotifyTrack, reason: string): Playlist
   };
 }
 
+function playlistTrackToSpotifyTrack(track: PlaylistTrack): SpotifyTrack {
+  return {
+    id: track.spotifyTrackId ?? "",
+    name: track.trackName,
+    uri: track.spotifyUri ?? (track.spotifyTrackId ? `spotify:track:${track.spotifyTrackId}` : ""),
+    artists: [
+      {
+        id: "",
+        name: track.artistName,
+      },
+    ],
+    album: {
+      id: "",
+      name: "",
+      images: track.albumImageUrl
+        ? [{ url: track.albumImageUrl, width: 640, height: 640 }]
+        : [],
+    },
+    duration_ms: 0,
+    popularity: 50,
+    preview_url: null,
+  };
+}
+
 /**
  * Resolves AI-suggested (track, artist) pairs to real Spotify tracks using
  * spotify.findTrack() — which has 3 strategies + fuzzy artist matching.
@@ -1442,7 +1466,7 @@ export async function POST(request: NextRequest) {
           minimumPoolTracks,
         });
 
-        if (combinedTracks.length >= minimumPoolTracks) {
+        if (combinedTracks.length >= counts.total) {
           after(async () => {
             await refreshEscapePool(user.id, spotify, admin).catch((err) => {
               console.warn("[break-loop] Background Escape Pool refresh skipped:", err);
@@ -1450,7 +1474,7 @@ export async function POST(request: NextRequest) {
           });
           const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used your Escape Pool plus a fresh top-up, with recent plays and top repeats blocked.`;
           return buildResponse(
-            sequencePlaylist(combinedTracks, "build"),
+            sequencePlaylist(combinedTracks.slice(0, counts.total), "build"),
             intro,
             requestStr,
             user.id,
@@ -1481,7 +1505,7 @@ export async function POST(request: NextRequest) {
         bestBreakTracks = escapePoolTracks.length > bestBreakTracks.length ? escapePoolTracks : bestBreakTracks;
       }
 
-      if (escapePoolTracks.length >= minimumPoolTracks) {
+      if (escapePoolTracks.length >= counts.total) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset came from your Escape Pool: tracks already mapped to your taste, with recent plays and top repeats blocked.`;
         return buildResponse(
           sequencePlaylist(escapePoolTracks.slice(0, counts.total), "build"),
@@ -1498,7 +1522,7 @@ export async function POST(request: NextRequest) {
         });
       });
 
-      if (bestBreakTracks.length >= Math.min(3, counts.total)) {
+      if (bestBreakTracks.length >= counts.total) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used the best non-repeat matches available while your Escape Pool keeps filling in the background.`;
         return buildResponse(
           sequencePlaylist(bestBreakTracks.slice(0, counts.total), "build"),
@@ -1532,7 +1556,7 @@ export async function POST(request: NextRequest) {
         [] as PlaylistTrack[],
       );
 
-      if (rescueTracks.length >= Math.min(3, counts.total)) {
+      if (rescueTracks.length >= counts.total) {
         const intro = `Your ${modeConfig.label.toLowerCase()} loop reset used a fresh Spotify search while your Escape Pool keeps filling in the background.`;
         return buildResponse(
           sequencePlaylist(rescueTracks, "build"),
@@ -1542,14 +1566,6 @@ export async function POST(request: NextRequest) {
           cacheKey,
         );
       }
-
-      return NextResponse.json(
-        {
-          error:
-            "Spotify did not return enough playable non-repeat tracks yet. Try a clearer direction like afro house, indie dance, or chill R&B.",
-        },
-        { status: 503 },
-      );
 
       const breakScoreContext: ScoreContext = {
         intent: { ...breakIntent, freshness: "mixed" },
@@ -1583,6 +1599,13 @@ export async function POST(request: NextRequest) {
         resetCandidates.push({ track, query, strict });
         return true;
       };
+
+      for (const track of bestBreakTracks.slice(0, counts.total)) {
+        addResetTrack(playlistTrackToSpotifyTrack(track), "escape pool seed", false);
+      }
+      for (const track of rescueTracks.slice(0, counts.total)) {
+        addResetTrack(playlistTrackToSpotifyTrack(track), "rescue search seed", false);
+      }
 
       const resetQueryStop = new Set(["break", "spotify", "loop", "reset", "refresh", "playlist", "music", "song", "songs", "track", "tracks"]);
       const cleanResetQuery = (query: string) =>
