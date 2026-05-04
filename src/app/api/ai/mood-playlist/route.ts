@@ -1836,8 +1836,48 @@ Return ONLY valid JSON:
         [...comfortTracks, ...forgottenTracks, ...breakerTracks].slice(0, counts.total),
         "build",
       );
+      let finalTracks = allTracks;
 
-      if (allTracks.length === 0) {
+      if (finalTracks.length < counts.total) {
+        const broadResetTracks = await withTimeout(
+          buildFastSearchPlaylist({
+            spotify,
+            requestStr: [
+              breakLoopTarget,
+              genreLock,
+              allGenres[0] ?? "",
+              ...modeConfig.queryBoosts,
+              requestStr,
+            ].filter(Boolean).join(" "),
+            allGenres,
+            intent: breakIntent,
+            intensity,
+            targetCount: counts.total - finalTracks.length,
+            recentSet,
+            knownArtistNorms,
+            avoidKnownArtists: breakLoopMode === "new_lane" || breakLoopMode === "surprise",
+            blockedTrackIds,
+            blockedTrackNorms,
+          }).catch((err) => {
+            console.warn("[break-loop] Broad fallback search skipped:", err);
+            return [] as PlaylistTrack[];
+          }),
+          6_000,
+          [] as PlaylistTrack[],
+        );
+
+        const seenIds = new Set(finalTracks.map((track) => track.spotifyTrackId).filter(Boolean));
+        const filledTracks = [...finalTracks];
+        for (const track of broadResetTracks) {
+          if (filledTracks.length >= counts.total) break;
+          if (!track.spotifyTrackId || seenIds.has(track.spotifyTrackId)) continue;
+          seenIds.add(track.spotifyTrackId);
+          filledTracks.push(track);
+        }
+        finalTracks = sequencePlaylist(filledTracks.slice(0, counts.total), "build");
+      }
+
+      if (finalTracks.length === 0) {
         return NextResponse.json(
           {
             error:
@@ -1852,7 +1892,7 @@ Return ONLY valid JSON:
         ? `Your ${modeConfig.label.toLowerCase()} loop reset steps away from ${dominantArtist}${breakLoopTarget ? ` toward ${breakLoopTarget}` : ""}: safe anchors, bridges, and fresh breakers.`
         : `Your ${modeConfig.label.toLowerCase()} loop reset${breakLoopTarget ? ` toward ${breakLoopTarget}` : ""} mixes safe anchors, bridges, and fresh tracks outside your repeats.`;
 
-      return buildResponse(allTracks, intro, requestStr, user.id, cacheKey);
+      return buildResponse(finalTracks, intro, requestStr, user.id, cacheKey);
     }
 
     // ── FRESH / DISCOVERY MODE ────────────────────────────────────────────────
